@@ -109,10 +109,32 @@ func (a *App) processIncomingMessageFull(phoneNumberID string, msg IncomingTextM
 	a.Log.Info("Processing message", "text", messageText, "buttonID", buttonID, "from", msg.From)
 
 	// Get or create active session for this contact
-	session := a.getOrCreateSession(account.OrganizationID, contact.ID, account.Name, msg.From, settings.SessionTimeoutMins)
+	session, isNewSession := a.getOrCreateSession(account.OrganizationID, contact.ID, account.Name, msg.From, settings.SessionTimeoutMins)
 
 	// Log incoming message to session
 	a.logSessionMessage(session.ID, "incoming", messageText, "keyword_check")
+
+	// Send greeting message for new sessions (first message or session timeout)
+	if isNewSession && settings.DefaultResponse != "" {
+		a.Log.Info("New session - sending greeting message", "contact", contact.PhoneNumber)
+		if len(settings.GreetingButtons) > 0 {
+			greetingButtons := make([]map[string]interface{}, 0)
+			for _, btn := range settings.GreetingButtons {
+				if btnMap, ok := btn.(map[string]interface{}); ok {
+					greetingButtons = append(greetingButtons, btnMap)
+				}
+			}
+			if len(greetingButtons) > 0 {
+				a.sendAndSaveInteractiveButtons(&account, contact, settings.DefaultResponse, greetingButtons)
+			} else {
+				a.sendAndSaveTextMessage(&account, contact, settings.DefaultResponse)
+			}
+		} else {
+			a.sendAndSaveTextMessage(&account, contact, settings.DefaultResponse)
+		}
+		a.logSessionMessage(session.ID, "outgoing", settings.DefaultResponse, "greeting")
+		// Continue processing to also handle keyword/flow triggers
+	}
 
 	// Check if user is in an active flow
 	if session.CurrentFlowID != nil {
@@ -159,10 +181,10 @@ func (a *App) processIncomingMessageFull(phoneNumberID string, msg IncomingTextM
 		a.Log.Info("AI not configured", "ai_enabled", settings.AIEnabled, "has_provider", settings.AIProvider != "", "has_api_key", settings.AIAPIKey != "")
 	}
 
-	// If no AI response or AI not enabled, send fallback message first, then greeting as last resort
-	if settings.FallbackMessage != "" {
+	// If no AI response or AI not enabled, send fallback message (for existing sessions)
+	// Greeting is already sent for new sessions above
+	if settings.FallbackMessage != "" && !isNewSession {
 		a.Log.Info("Sending fallback message", "response", settings.FallbackMessage)
-		// Check if fallback has buttons
 		if len(settings.FallbackButtons) > 0 {
 			fallbackButtons := make([]map[string]interface{}, 0)
 			for _, btn := range settings.FallbackButtons {
@@ -179,28 +201,8 @@ func (a *App) processIncomingMessageFull(phoneNumberID string, msg IncomingTextM
 			a.sendAndSaveTextMessage(&account, contact, settings.FallbackMessage)
 		}
 		a.logSessionMessage(session.ID, "outgoing", settings.FallbackMessage, "fallback_response")
-	} else if settings.DefaultResponse != "" {
-		// Fall back to greeting/default response if no fallback message
-		a.Log.Info("Sending greeting/default response", "response", settings.DefaultResponse)
-		// Check if greeting has buttons
-		if len(settings.GreetingButtons) > 0 {
-			greetingButtons := make([]map[string]interface{}, 0)
-			for _, btn := range settings.GreetingButtons {
-				if btnMap, ok := btn.(map[string]interface{}); ok {
-					greetingButtons = append(greetingButtons, btnMap)
-				}
-			}
-			if len(greetingButtons) > 0 {
-				a.sendAndSaveInteractiveButtons(&account, contact, settings.DefaultResponse, greetingButtons)
-			} else {
-				a.sendAndSaveTextMessage(&account, contact, settings.DefaultResponse)
-			}
-		} else {
-			a.sendAndSaveTextMessage(&account, contact, settings.DefaultResponse)
-		}
-		a.logSessionMessage(session.ID, "outgoing", settings.DefaultResponse, "greeting_response")
-	} else {
-		a.Log.Info("No fallback or greeting response configured, no response will be sent")
+	} else if !isNewSession {
+		a.Log.Info("No fallback message configured for existing session")
 	}
 }
 
@@ -474,7 +476,8 @@ func (a *App) getOrCreateContact(orgID uuid.UUID, phoneNumber, profileName strin
 }
 
 // getOrCreateSession finds an active session or creates a new one
-func (a *App) getOrCreateSession(orgID, contactID uuid.UUID, accountName, phoneNumber string, timeoutMins int) *models.ChatbotSession {
+// Returns the session and a boolean indicating if it's a new session
+func (a *App) getOrCreateSession(orgID, contactID uuid.UUID, accountName, phoneNumber string, timeoutMins int) (*models.ChatbotSession, bool) {
 	now := time.Now()
 
 	// Look for an active session that hasn't timed out
@@ -486,7 +489,7 @@ func (a *App) getOrCreateSession(orgID, contactID uuid.UUID, accountName, phoneN
 	if result.Error == nil {
 		// Update last activity
 		a.DB.Model(&session).Update("last_activity_at", now)
-		return &session
+		return &session, false // existing session
 	}
 
 	// Create new session
@@ -504,7 +507,7 @@ func (a *App) getOrCreateSession(orgID, contactID uuid.UUID, accountName, phoneN
 	if err := a.DB.Create(&session).Error; err != nil {
 		a.Log.Error("Failed to create session", "error", err)
 	}
-	return &session
+	return &session, true // new session
 }
 
 // logSessionMessage logs a message to the chatbot session
