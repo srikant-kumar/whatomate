@@ -43,6 +43,7 @@ import {
 import { chatbotService, flowsService } from '@/services/api'
 import { toast } from 'vue-sonner'
 import { Plus, Pencil, Trash2, Workflow, ArrowLeft, Play, Pause, GripVertical, ChevronDown, ChevronUp } from 'lucide-vue-next'
+import draggable from 'vuedraggable'
 
 interface ApiConfig {
   url: string
@@ -314,6 +315,14 @@ function removeStep(index: number) {
   } else if (expandedStep.value !== null && expandedStep.value > index) {
     expandedStep.value--
   }
+}
+
+function updateStepOrders() {
+  // Update step_order after drag and drop
+  formData.value.steps.forEach((step, idx) => {
+    step.step_order = idx + 1
+  })
+  expandedStep.value = null
 }
 
 function moveStep(index: number, direction: 'up' | 'down') {
@@ -637,45 +646,31 @@ function removeButton(step: FlowStep, index: number) {
                     </Button>
                   </div>
 
-                  <div v-else class="space-y-2">
-                    <div
-                      v-for="(step, index) in formData.steps"
-                      :key="index"
-                      class="border rounded-lg"
-                    >
-                      <!-- Step Header -->
-                      <div
-                        class="flex items-center gap-2 p-3 cursor-pointer hover:bg-muted/50"
-                        @click="expandedStep = expandedStep === index ? null : index"
-                      >
-                        <GripVertical class="h-4 w-4 text-muted-foreground" />
-                        <Badge variant="outline" class="font-mono">{{ index + 1 }}</Badge>
-                        <span class="flex-1 font-medium">{{ step.step_name || `Step ${index + 1}` }}</span>
-                        <span class="text-sm text-muted-foreground truncate max-w-[200px]">
-                          {{ step.message || 'No message' }}
-                        </span>
-                        <div class="flex items-center gap-1">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            class="h-7 w-7"
-                            :disabled="index === 0"
-                            @click.stop="moveStep(index, 'up')"
-                          >
-                            <ChevronUp class="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            class="h-7 w-7"
-                            :disabled="index === formData.steps.length - 1"
-                            @click.stop="moveStep(index, 'down')"
-                          >
-                            <ChevronDown class="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
+                  <draggable
+                    v-else
+                    v-model="formData.steps"
+                    item-key="step_name"
+                    handle=".drag-handle"
+                    class="space-y-2"
+                    @end="updateStepOrders"
+                  >
+                    <template #item="{ element: step, index }">
+                      <div class="border rounded-lg">
+                        <!-- Step Header -->
+                        <div
+                          class="flex items-center gap-2 p-3 cursor-pointer hover:bg-muted/50"
+                          @click="expandedStep = expandedStep === index ? null : index"
+                        >
+                          <GripVertical class="h-4 w-4 text-muted-foreground cursor-grab drag-handle" />
+                          <Badge variant="outline" class="font-mono">{{ index + 1 }}</Badge>
+                          <span class="flex-1 font-medium">{{ step.step_name || `Step ${index + 1}` }}</span>
+                          <span class="text-sm text-muted-foreground truncate max-w-[200px]">
+                            {{ step.message || 'No message' }}
+                          </span>
+                          <div class="flex items-center gap-1">
+                            <Button
+                              variant="ghost"
+                              size="icon"
                             class="h-7 w-7 text-destructive"
                             @click.stop="removeStep(index)"
                           >
@@ -968,7 +963,8 @@ function removeButton(step: FlowStep, index: number) {
                         </div>
                       </div>
                     </div>
-                  </div>
+                  </template>
+                </draggable>
                 </div>
               </div>
             </div>

@@ -30,6 +30,7 @@
     "vue": "^3.4.0",
     "vue-router": "^4.2.5",
     "vue-sonner": "^1.0.0",
+    "vuedraggable": "^4.1.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {
