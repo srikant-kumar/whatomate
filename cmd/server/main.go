@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -13,7 +14,9 @@ import (
 	"github.com/shridarpatil/whatomate/internal/frontend"
 	"github.com/shridarpatil/whatomate/internal/handlers"
 	"github.com/shridarpatil/whatomate/internal/middleware"
+	"github.com/shridarpatil/whatomate/internal/queue"
 	"github.com/shridarpatil/whatomate/internal/websocket"
+	"github.com/shridarpatil/whatomate/internal/worker"
 	"github.com/shridarpatil/whatomate/pkg/whatsapp"
 	"github.com/valyala/fasthttp"
 	"github.com/zerodha/fastglue"
@@ -21,8 +24,9 @@ import (
 )
 
 var (
-	configPath = flag.String("config", "config.toml", "Path to config file")
-	migrate    = flag.Bool("migrate", false, "Run database migrations")
+	configPath  = flag.String("config", "config.toml", "Path to config file")
+	migrate     = flag.Bool("migrate", false, "Run database migrations")
+	numWorkers  = flag.Int("workers", 1, "Number of workers to run (0 to disable embedded workers)")
 )
 
 func main() {
@@ -75,6 +79,10 @@ func main() {
 	}
 	lo.Info("Connected to Redis")
 
+	// Initialize job queue
+	jobQueue := queue.NewRedisQueue(rdb, lo)
+	lo.Info("Job queue initialized")
+
 	// Initialize Fastglue
 	g := fastglue.NewGlue()
 
@@ -94,6 +102,7 @@ func main() {
 		Log:      lo,
 		WhatsApp: waClient,
 		WSHub:    wsHub,
+		Queue:    jobQueue,
 	}
 
 	// Setup middleware
@@ -121,12 +130,52 @@ func main() {
 		}
 	}()
 
+	// Start embedded workers
+	var workers []*worker.Worker
+	var workerCancel context.CancelFunc
+	if *numWorkers > 0 {
+		var workerCtx context.Context
+		workerCtx, workerCancel = context.WithCancel(context.Background())
+
+		for i := 0; i < *numWorkers; i++ {
+			w, err := worker.New(cfg, db, rdb, lo)
+			if err != nil {
+				lo.Fatal("Failed to create worker", "error", err, "worker_num", i+1)
+			}
+			workers = append(workers, w)
+
+			workerNum := i + 1
+			go func() {
+				lo.Info("Worker started", "worker_num", workerNum)
+				if err := w.Run(workerCtx); err != nil && err != context.Canceled {
+					lo.Error("Worker error", "error", err, "worker_num", workerNum)
+				}
+			}()
+		}
+		lo.Info("Embedded workers started", "count", *numWorkers)
+	} else {
+		lo.Info("Embedded workers disabled, run workers separately")
+	}
+
 	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	lo.Info("Shutting down server...")
+	lo.Info("Shutting down...")
+
+	// Stop workers first
+	if workerCancel != nil {
+		lo.Info("Stopping workers...", "count", len(workers))
+		workerCancel()
+		for _, w := range workers {
+			w.Close()
+		}
+		lo.Info("Workers stopped")
+	}
+
+	// Then stop server
+	lo.Info("Stopping server...")
 	if err := server.Shutdown(); err != nil {
 		lo.Error("Server shutdown error", "error", err)
 	}

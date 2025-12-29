@@ -378,8 +378,17 @@ func (a *App) StartCampaign(r *fastglue.Request) error {
 
 	a.Log.Info("Campaign started", "campaign_id", id)
 
-	// Process campaign in background goroutine
-	go a.processCampaign(id)
+	// Enqueue campaign for processing by worker
+	if a.Queue != nil {
+		if err := a.Queue.EnqueueCampaign(r.RequestCtx, id); err != nil {
+			a.Log.Error("Failed to enqueue campaign", "error", err)
+			return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to queue campaign", nil, "")
+		}
+	} else {
+		// Fallback to goroutine if queue is not configured (for backwards compatibility)
+		a.Log.Warn("Queue not configured, processing campaign in goroutine")
+		go a.processCampaign(id)
+	}
 
 	return r.SendEnvelope(map[string]interface{}{
 		"message": "Campaign started",

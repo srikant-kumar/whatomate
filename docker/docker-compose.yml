@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   api:
     build:
@@ -39,11 +37,15 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.worker
     environment:
+      - WHATOMATE_APP_NAME=Whatomate
+      - WHATOMATE_APP_ENVIRONMENT=development
+      - WHATOMATE_APP_DEBUG=true
       - WHATOMATE_DATABASE_HOST=db
       - WHATOMATE_DATABASE_PORT=5432
       - WHATOMATE_DATABASE_USER=whatomate
       - WHATOMATE_DATABASE_PASSWORD=whatomate123
       - WHATOMATE_DATABASE_NAME=whatomate
+      - WHATOMATE_DATABASE_SSL_MODE=disable
       - WHATOMATE_REDIS_HOST=redis
       - WHATOMATE_REDIS_PORT=6379
     depends_on:
