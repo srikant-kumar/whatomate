@@ -1,0 +1,176 @@
+package handlers
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/shridarpatil/whatomate/internal/models"
+	"gorm.io/gorm"
+)
+
+const (
+	// Cache TTLs
+	settingsCacheTTL     = 5 * time.Minute
+	flowsCacheTTL        = 5 * time.Minute
+	keywordRulesCacheTTL = 5 * time.Minute
+
+	// Cache key prefixes
+	settingsCachePrefix     = "chatbot:settings:"
+	flowsCachePrefix        = "chatbot:flows:"
+	keywordRulesCachePrefix = "chatbot:keywords:"
+)
+
+// getChatbotSettingsCached retrieves chatbot settings from cache or database
+func (a *App) getChatbotSettingsCached(orgID uuid.UUID, whatsAppAccount string) (*models.ChatbotSettings, error) {
+	ctx := context.Background()
+	cacheKey := fmt.Sprintf("%s%s:%s", settingsCachePrefix, orgID.String(), whatsAppAccount)
+
+	// Try cache first
+	cached, err := a.Redis.Get(ctx, cacheKey).Result()
+	if err == nil && cached != "" {
+		var settings models.ChatbotSettings
+		if err := json.Unmarshal([]byte(cached), &settings); err == nil {
+			return &settings, nil
+		}
+	}
+
+	// Cache miss - fetch from database
+	var settings models.ChatbotSettings
+	result := a.DB.Where("organization_id = ? AND (whats_app_account = ? OR whats_app_account = '')",
+		orgID, whatsAppAccount).
+		Order("CASE WHEN whats_app_account = '' THEN 1 ELSE 0 END"). // Prefer account-specific settings
+		First(&settings)
+
+	if result.Error != nil {
+		return nil, result.Error
+	}
+
+	// Cache the result
+	if data, err := json.Marshal(settings); err == nil {
+		a.Redis.Set(ctx, cacheKey, data, settingsCacheTTL)
+	}
+
+	return &settings, nil
+}
+
+// getChatbotFlowsCached retrieves all enabled flows with steps from cache or database
+func (a *App) getChatbotFlowsCached(orgID uuid.UUID) ([]models.ChatbotFlow, error) {
+	ctx := context.Background()
+	cacheKey := fmt.Sprintf("%s%s", flowsCachePrefix, orgID.String())
+
+	// Try cache first
+	cached, err := a.Redis.Get(ctx, cacheKey).Result()
+	if err == nil && cached != "" {
+		var flows []models.ChatbotFlow
+		if err := json.Unmarshal([]byte(cached), &flows); err == nil {
+			return flows, nil
+		}
+	}
+
+	// Cache miss - fetch from database
+	var flows []models.ChatbotFlow
+	if err := a.DB.Where("organization_id = ? AND is_enabled = true", orgID).
+		Preload("Steps", func(db *gorm.DB) *gorm.DB {
+			return db.Order("step_order ASC")
+		}).
+		Find(&flows).Error; err != nil {
+		return nil, err
+	}
+
+	// Cache the result
+	if data, err := json.Marshal(flows); err == nil {
+		a.Redis.Set(ctx, cacheKey, data, flowsCacheTTL)
+	}
+
+	return flows, nil
+}
+
+// getChatbotFlowByIDCached retrieves a specific flow by ID from the cached flows list
+func (a *App) getChatbotFlowByIDCached(orgID uuid.UUID, flowID uuid.UUID) (*models.ChatbotFlow, error) {
+	flows, err := a.getChatbotFlowsCached(orgID)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range flows {
+		if flows[i].ID == flowID {
+			return &flows[i], nil
+		}
+	}
+
+	return nil, gorm.ErrRecordNotFound
+}
+
+// getKeywordRulesCached retrieves keyword rules from cache or database
+func (a *App) getKeywordRulesCached(orgID uuid.UUID, whatsAppAccount string) ([]models.KeywordRule, error) {
+	ctx := context.Background()
+	cacheKey := fmt.Sprintf("%s%s:%s", keywordRulesCachePrefix, orgID.String(), whatsAppAccount)
+
+	// Try cache first
+	cached, err := a.Redis.Get(ctx, cacheKey).Result()
+	if err == nil && cached != "" {
+		var rules []models.KeywordRule
+		if err := json.Unmarshal([]byte(cached), &rules); err == nil {
+			return rules, nil
+		}
+	}
+
+	// Cache miss - fetch from database (account-specific + global)
+	var rules []models.KeywordRule
+
+	// Get account-specific rules
+	var accountRules []models.KeywordRule
+	a.DB.Where("organization_id = ? AND whats_app_account = ? AND is_enabled = true",
+		orgID, whatsAppAccount).
+		Order("priority DESC").
+		Find(&accountRules)
+
+	// Get global rules (whats_app_account = '')
+	var globalRules []models.KeywordRule
+	a.DB.Where("organization_id = ? AND whats_app_account = '' AND is_enabled = true",
+		orgID).
+		Order("priority DESC").
+		Find(&globalRules)
+
+	// Merge: account-specific first, then global
+	rules = append(accountRules, globalRules...)
+
+	// Cache the result
+	if data, err := json.Marshal(rules); err == nil {
+		a.Redis.Set(ctx, cacheKey, data, keywordRulesCacheTTL)
+	}
+
+	return rules, nil
+}
+
+// InvalidateChatbotSettingsCache invalidates the settings cache for an organization
+func (a *App) InvalidateChatbotSettingsCache(orgID uuid.UUID) {
+	ctx := context.Background()
+	pattern := fmt.Sprintf("%s%s:*", settingsCachePrefix, orgID.String())
+	a.deleteKeysByPattern(ctx, pattern)
+}
+
+// InvalidateChatbotFlowsCache invalidates the flows cache for an organization
+func (a *App) InvalidateChatbotFlowsCache(orgID uuid.UUID) {
+	ctx := context.Background()
+	cacheKey := fmt.Sprintf("%s%s", flowsCachePrefix, orgID.String())
+	a.Redis.Del(ctx, cacheKey)
+}
+
+// InvalidateKeywordRulesCache invalidates the keyword rules cache for an organization
+func (a *App) InvalidateKeywordRulesCache(orgID uuid.UUID) {
+	ctx := context.Background()
+	pattern := fmt.Sprintf("%s%s:*", keywordRulesCachePrefix, orgID.String())
+	a.deleteKeysByPattern(ctx, pattern)
+}
+
+// deleteKeysByPattern deletes all keys matching a pattern
+func (a *App) deleteKeysByPattern(ctx context.Context, pattern string) {
+	iter := a.Redis.Scan(ctx, 0, pattern, 100).Iterator()
+	for iter.Next(ctx) {
+		a.Redis.Del(ctx, iter.Val())
+	}
+}

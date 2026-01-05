@@ -367,6 +367,9 @@ func (a *App) UpdateChatbotSettings(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to save settings", nil, "")
 	}
 
+	// Invalidate cache
+	a.InvalidateChatbotSettingsCache(orgID)
+
 	return r.SendEnvelope(map[string]interface{}{
 		"message": "Settings updated successfully",
 	})
@@ -458,6 +461,9 @@ func (a *App) CreateKeywordRule(r *fastglue.Request) error {
 	if err := a.DB.Create(&rule).Error; err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to create keyword rule", nil, "")
 	}
+
+	// Invalidate cache
+	a.InvalidateKeywordRulesCache(orgID)
 
 	return r.SendEnvelope(map[string]interface{}{
 		"id":      rule.ID.String(),
@@ -558,6 +564,9 @@ func (a *App) UpdateKeywordRule(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to update keyword rule", nil, "")
 	}
 
+	// Invalidate cache
+	a.InvalidateKeywordRulesCache(orgID)
+
 	return r.SendEnvelope(map[string]interface{}{
 		"message": "Keyword rule updated successfully",
 	})
@@ -583,6 +592,9 @@ func (a *App) DeleteKeywordRule(r *fastglue.Request) error {
 	if result.RowsAffected == 0 {
 		return r.SendErrorEnvelope(fasthttp.StatusNotFound, "Keyword rule not found", nil, "")
 	}
+
+	// Invalidate cache
+	a.InvalidateKeywordRulesCache(orgID)
 
 	return r.SendEnvelope(map[string]interface{}{
 		"message": "Keyword rule deleted successfully",
@@ -733,6 +745,9 @@ func (a *App) CreateChatbotFlow(r *fastglue.Request) error {
 
 	tx.Commit()
 
+	// Invalidate cache
+	a.InvalidateChatbotFlowsCache(orgID)
+
 	return r.SendEnvelope(map[string]interface{}{
 		"id":      flow.ID.String(),
 		"message": "Flow created successfully",
@@ -881,6 +896,9 @@ func (a *App) UpdateChatbotFlow(r *fastglue.Request) error {
 
 	tx.Commit()
 
+	// Invalidate cache
+	a.InvalidateChatbotFlowsCache(orgID)
+
 	return r.SendEnvelope(map[string]interface{}{
 		"message": "Flow updated successfully",
 	})
@@ -920,6 +938,10 @@ func (a *App) DeleteChatbotFlow(r *fastglue.Request) error {
 	}
 
 	tx.Commit()
+
+	// Invalidate cache
+	a.InvalidateChatbotFlowsCache(orgID)
+
 	return r.SendEnvelope(map[string]interface{}{
 		"message": "Flow deleted successfully",
 	})

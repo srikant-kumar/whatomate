@@ -15,7 +15,6 @@ import (
 	"github.com/shridarpatil/whatomate/internal/models"
 	"github.com/shridarpatil/whatomate/internal/websocket"
 	"github.com/shridarpatil/whatomate/pkg/whatsapp"
-	"gorm.io/gorm"
 )
 
 // IncomingTextMessage represents a text, interactive, or media message from the webhook
@@ -294,15 +293,10 @@ func (a *App) processIncomingMessageFull(phoneNumberID string, msg IncomingTextM
 		return
 	}
 
-	// Check if chatbot is enabled for this account
-	var settings models.ChatbotSettings
-	result := a.DB.Where("organization_id = ? AND (whats_app_account = ? OR whats_app_account = '')",
-		account.OrganizationID, account.Name).
-		Order("CASE WHEN whats_app_account = '' THEN 1 ELSE 0 END"). // Prefer account-specific settings
-		First(&settings)
-
-	if result.Error != nil {
-		a.Log.Error("Failed to load chatbot settings", "error", result.Error, "account", account.Name, "org_id", account.OrganizationID)
+	// Check if chatbot is enabled for this account (use cache)
+	settings, err := a.getChatbotSettingsCached(account.OrganizationID, account.Name)
+	if err != nil {
+		a.Log.Error("Failed to load chatbot settings", "error", err, "account", account.Name, "org_id", account.OrganizationID)
 		return
 	}
 	if !settings.IsEnabled {
@@ -417,7 +411,7 @@ func (a *App) processIncomingMessageFull(phoneNumberID string, msg IncomingTextM
 	// If no keyword matched, try AI response if enabled
 	if settings.AIEnabled && settings.AIProvider != "" && settings.AIAPIKey != "" {
 		a.Log.Info("Attempting AI response", "provider", settings.AIProvider, "model", settings.AIModel)
-		aiResponse, err := a.generateAIResponse(&settings, session, messageText)
+		aiResponse, err := a.generateAIResponse(settings, session, messageText)
 		if err != nil {
 			a.Log.Error("AI response failed", "error", err, "provider", settings.AIProvider, "model", settings.AIModel)
 			// Fall through to default response
@@ -467,22 +461,11 @@ type KeywordResponse struct {
 
 // matchKeywordRules checks if the message matches any keyword rules
 func (a *App) matchKeywordRules(orgID uuid.UUID, accountName, messageText string) (*KeywordResponse, bool) {
-	var rules []models.KeywordRule
-	err := a.DB.Where("organization_id = ? AND whats_app_account = ? AND is_enabled = true",
-		orgID, accountName).
-		Order("priority DESC").
-		Find(&rules).Error
-
+	// Use cached keyword rules (includes both account-specific and global rules)
+	rules, err := a.getKeywordRulesCached(orgID, accountName)
 	if err != nil {
 		a.Log.Error("Failed to fetch keyword rules", "error", err)
 		return nil, false
-	}
-
-	// Also get org-level rules if no account-specific ones
-	if len(rules) == 0 {
-		a.DB.Where("organization_id = ? AND whats_app_account = '' AND is_enabled = true", orgID).
-			Order("priority DESC").
-			Find(&rules)
 	}
 
 	messageLower := strings.ToLower(messageText)
@@ -834,12 +817,12 @@ func (a *App) logSessionMessage(sessionID uuid.UUID, direction, message, stepNam
 
 // matchFlowTrigger checks if the message triggers any flow
 func (a *App) matchFlowTrigger(orgID uuid.UUID, accountName, messageText string) *models.ChatbotFlow {
-	var flows []models.ChatbotFlow
-	a.DB.Where("organization_id = ? AND is_enabled = true", orgID).
-		Preload("Steps", func(db *gorm.DB) *gorm.DB {
-			return db.Order("step_order ASC")
-		}).
-		Find(&flows)
+	// Use cached flows (includes steps)
+	flows, err := a.getChatbotFlowsCached(orgID)
+	if err != nil {
+		a.Log.Error("Failed to fetch chatbot flows", "error", err)
+		return nil
+	}
 
 	messageLower := strings.ToLower(messageText)
 
@@ -891,13 +874,9 @@ func (a *App) startFlow(account *models.WhatsAppAccount, session *models.Chatbot
 
 // processFlowResponse handles user response within a flow
 func (a *App) processFlowResponse(account *models.WhatsAppAccount, session *models.ChatbotSession, contact *models.Contact, userInput string, buttonID string) {
-	// Load the current flow
-	var flow models.ChatbotFlow
-	if err := a.DB.Where("id = ?", session.CurrentFlowID).
-		Preload("Steps", func(db *gorm.DB) *gorm.DB {
-			return db.Order("step_order ASC")
-		}).
-		First(&flow).Error; err != nil {
+	// Load the current flow from cache
+	flow, err := a.getChatbotFlowByIDCached(account.OrganizationID, *session.CurrentFlowID)
+	if err != nil {
 		a.Log.Error("Failed to load flow", "error", err)
 		a.exitFlow(session)
 		return
@@ -1060,7 +1039,7 @@ func (a *App) processFlowResponse(account *models.WhatsAppAccount, session *mode
 
 	// Move to next step or complete flow
 	if nextStepName == "" {
-		a.completeFlow(account, session, contact, &flow)
+		a.completeFlow(account, session, contact, flow)
 		return
 	}
 
@@ -1075,7 +1054,7 @@ func (a *App) processFlowResponse(account *models.WhatsAppAccount, session *mode
 
 	if nextStep == nil {
 		a.Log.Warn("Next step not found, completing flow", "next_step", nextStepName)
-		a.completeFlow(account, session, contact, &flow)
+		a.completeFlow(account, session, contact, flow)
 		return
 	}
 
@@ -1086,7 +1065,7 @@ func (a *App) processFlowResponse(account *models.WhatsAppAccount, session *mode
 	})
 
 	a.Log.Info("Moving to next step", "nextStep", nextStep.StepName, "skipCondition", nextStep.SkipCondition, "sessionData", session.SessionData)
-	a.sendStepWithSkipCheck(account, session, contact, nextStep, &flow, nil)
+	a.sendStepWithSkipCheck(account, session, contact, nextStep, flow, nil)
 }
 
 // completeFlow finishes a flow and sends completion message
