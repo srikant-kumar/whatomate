@@ -27,6 +27,9 @@ type Worker struct {
 	Publisher *queue.Publisher
 }
 
+// Ensure Worker implements JobHandler interface
+var _ queue.JobHandler = (*Worker)(nil)
+
 // New creates a new Worker instance
 func New(cfg *config.Config, db *gorm.DB, rdb *redis.Client, log logf.Logger) (*Worker, error) {
 	consumer, err := queue.NewRedisConsumer(rdb, log)
@@ -51,7 +54,7 @@ func New(cfg *config.Config, db *gorm.DB, rdb *redis.Client, log logf.Logger) (*
 func (w *Worker) Run(ctx context.Context) error {
 	w.Log.Info("Worker starting")
 
-	err := w.Consumer.Consume(ctx, w.handleCampaignJob)
+	err := w.Consumer.Consume(ctx, w)
 	if err != nil && ctx.Err() == nil {
 		return fmt.Errorf("consumer error: %w", err)
 	}
@@ -60,194 +63,184 @@ func (w *Worker) Run(ctx context.Context) error {
 	return nil
 }
 
-// handleCampaignJob processes a single campaign job
-func (w *Worker) handleCampaignJob(ctx context.Context, job *queue.CampaignJob) error {
-	w.Log.Info("Processing campaign job", "campaign_id", job.CampaignID)
-
-	if err := w.processCampaign(ctx, job.CampaignID); err != nil {
-		w.Log.Error("Failed to process campaign", "error", err, "campaign_id", job.CampaignID)
-		return err
-	}
-
-	w.Log.Info("Campaign job completed", "campaign_id", job.CampaignID)
-	return nil
-}
-
-// processCampaign processes a campaign by sending messages to all recipients
-func (w *Worker) processCampaign(ctx context.Context, campaignID uuid.UUID) error {
-	w.Log.Info("Processing campaign", "campaign_id", campaignID)
-
-	// Get campaign with template
+// HandleRecipientJob processes a single recipient message job
+func (w *Worker) HandleRecipientJob(ctx context.Context, job *queue.RecipientJob) error {
+	// Check if campaign is still active before sending
 	var campaign models.BulkMessageCampaign
-	if err := w.DB.Where("id = ?", campaignID).Preload("Template").First(&campaign).Error; err != nil {
-		w.Log.Error("Failed to load campaign for processing", "error", err, "campaign_id", campaignID)
+	if err := w.DB.Where("id = ?", job.CampaignID).Preload("Template").First(&campaign).Error; err != nil {
+		w.Log.Error("Failed to load campaign", "error", err, "campaign_id", job.CampaignID)
 		return fmt.Errorf("failed to load campaign: %w", err)
 	}
 
-	// Check if campaign is still in a startable state
-	if campaign.Status != "queued" && campaign.Status != "processing" {
-		w.Log.Info("Campaign not in processable state", "campaign_id", campaignID, "status", campaign.Status)
+	// Skip if campaign is paused or cancelled
+	if campaign.Status == "paused" || campaign.Status == "cancelled" {
+		w.Log.Info("Campaign not active, skipping recipient", "campaign_id", job.CampaignID, "status", campaign.Status, "recipient_id", job.RecipientID)
 		return nil // Not an error, just skip
 	}
 
 	// Get WhatsApp account
 	var account models.WhatsAppAccount
-	if err := w.DB.Where("name = ? AND organization_id = ?", campaign.WhatsAppAccount, campaign.OrganizationID).First(&account).Error; err != nil {
+	if err := w.DB.Where("name = ? AND organization_id = ?", campaign.WhatsAppAccount, job.OrganizationID).First(&account).Error; err != nil {
 		w.Log.Error("Failed to load WhatsApp account", "error", err, "account_name", campaign.WhatsAppAccount)
-		w.DB.Model(&campaign).Update("status", "failed")
-		return fmt.Errorf("failed to load WhatsApp account: %w", err)
+		w.updateRecipientStatus(job.RecipientID, "failed", "", "WhatsApp account not found")
+		w.incrementCampaignCount(job.CampaignID, "failed_count")
+		return nil // Don't retry, mark as failed
 	}
 
-	// Update status to processing
-	w.DB.Model(&campaign).Update("status", "processing")
-
-	// Get all pending recipients
-	var recipients []models.BulkMessageRecipient
-	if err := w.DB.Where("campaign_id = ? AND status = ?", campaignID, "pending").Find(&recipients).Error; err != nil {
-		w.Log.Error("Failed to load recipients", "error", err, "campaign_id", campaignID)
-		w.DB.Model(&campaign).Update("status", "failed")
-		return fmt.Errorf("failed to load recipients: %w", err)
+	// Get or create contact for this recipient
+	contact, err := w.getOrCreateContact(job.OrganizationID, job.PhoneNumber, job.RecipientName)
+	if err != nil || contact == nil {
+		w.Log.Error("Failed to get or create contact", "error", err, "phone", job.PhoneNumber)
+		w.updateRecipientStatus(job.RecipientID, "failed", "", "Failed to create contact")
+		w.incrementCampaignCount(job.CampaignID, "failed_count")
+		return nil // Don't retry
 	}
 
-	w.Log.Info("Processing recipients", "campaign_id", campaignID, "count", len(recipients))
+	// Build recipient for sending
+	recipient := &models.BulkMessageRecipient{
+		PhoneNumber:    job.PhoneNumber,
+		RecipientName:  job.RecipientName,
+		TemplateParams: job.TemplateParams,
+	}
 
-	sentCount := campaign.SentCount
-	failedCount := campaign.FailedCount
+	// Send template message
+	waMessageID, err := w.sendTemplateMessage(ctx, &account, campaign.Template, recipient)
 
-	for _, recipient := range recipients {
-		// Check context for cancellation
-		select {
-		case <-ctx.Done():
-			w.Log.Info("Campaign processing cancelled by context", "campaign_id", campaignID)
-			return ctx.Err()
-		default:
-		}
-
-		// Check if campaign is still active (not paused/cancelled)
-		var currentCampaign models.BulkMessageCampaign
-		w.DB.Where("id = ?", campaignID).First(&currentCampaign)
-		if currentCampaign.Status == "paused" || currentCampaign.Status == "cancelled" {
-			w.Log.Info("Campaign stopped", "campaign_id", campaignID, "status", currentCampaign.Status)
-			return nil
-		}
-
-		// Get or create contact for this recipient
-		contact, err := w.getOrCreateContact(campaign.OrganizationID, recipient.PhoneNumber, recipient.RecipientName)
-		if err != nil || contact == nil {
-			w.Log.Error("Failed to get or create contact", "error", err, "phone", recipient.PhoneNumber)
-			w.DB.Model(&recipient).Updates(map[string]interface{}{
-				"status":        "failed",
-				"error_message": "Failed to create contact",
-			})
-			failedCount++
-			continue
-		}
-
-		// Send template message
-		waMessageID, err := w.sendTemplateMessage(ctx, &account, campaign.Template, &recipient)
-
-		// Create Message record with campaign_id in metadata
-		message := models.Message{
-			OrganizationID:    campaign.OrganizationID,
-			WhatsAppAccount:   campaign.WhatsAppAccount,
-			ContactID:         contact.ID,
-			WhatsAppMessageID: waMessageID,
-			Direction:         "outgoing",
-			MessageType:       "template",
-			TemplateParams:    recipient.TemplateParams,
-			Metadata: models.JSONB{
-				"campaign_id":    campaignID.String(),
-				"recipient_name": recipient.RecipientName,
-			},
-		}
-		if campaign.Template != nil {
-			message.TemplateName = campaign.Template.Name
-			// Store template body with substituted values for display in chat
-			content := campaign.Template.BodyContent
-			// Replace placeholders {{1}}, {{2}}, etc. with actual values
-			if recipient.TemplateParams != nil {
-				for i := 1; i <= 10; i++ {
-					key := fmt.Sprintf("%d", i)
-					if val, ok := recipient.TemplateParams[key]; ok {
-						placeholder := fmt.Sprintf("{{%d}}", i)
-						content = strings.ReplaceAll(content, placeholder, fmt.Sprintf("%v", val))
-					}
+	// Create Message record
+	message := models.Message{
+		OrganizationID:    job.OrganizationID,
+		WhatsAppAccount:   campaign.WhatsAppAccount,
+		ContactID:         contact.ID,
+		WhatsAppMessageID: waMessageID,
+		Direction:         "outgoing",
+		MessageType:       "template",
+		TemplateParams:    job.TemplateParams,
+		Metadata: models.JSONB{
+			"campaign_id":    job.CampaignID.String(),
+			"recipient_name": job.RecipientName,
+		},
+	}
+	if campaign.Template != nil {
+		message.TemplateName = campaign.Template.Name
+		content := campaign.Template.BodyContent
+		if job.TemplateParams != nil {
+			for i := 1; i <= 10; i++ {
+				key := fmt.Sprintf("%d", i)
+				if val, ok := job.TemplateParams[key]; ok {
+					placeholder := fmt.Sprintf("{{%d}}", i)
+					content = strings.ReplaceAll(content, placeholder, fmt.Sprintf("%v", val))
 				}
 			}
-			message.Content = content
 		}
-
-		if err != nil {
-			w.Log.Error("Failed to send message", "error", err, "recipient", recipient.PhoneNumber)
-			message.Status = "failed"
-			message.ErrorMessage = err.Error()
-			failedCount++
-		} else {
-			w.Log.Info("Message sent", "recipient", recipient.PhoneNumber, "message_id", waMessageID)
-			message.Status = "sent"
-			sentCount++
-		}
-
-		// Save message record
-		if err := w.DB.Create(&message).Error; err != nil {
-			w.Log.Error("Failed to save campaign message", "error", err, "recipient", recipient.PhoneNumber)
-		}
-
-		// Update BulkMessageRecipient status to track which recipients have been processed
-		recipientUpdate := map[string]interface{}{
-			"status":               message.Status,
-			"whats_app_message_id": waMessageID,
-		}
-		if message.Status == "failed" {
-			recipientUpdate["error_message"] = message.ErrorMessage
-		} else {
-			recipientUpdate["sent_at"] = time.Now()
-		}
-		w.DB.Model(&recipient).Updates(recipientUpdate)
-
-		// Update campaign counts
-		w.DB.Model(&campaign).Updates(map[string]interface{}{
-			"sent_count":   sentCount,
-			"failed_count": failedCount,
-		})
-
-		// Publish stats update via Redis pub/sub for real-time WebSocket broadcast
-		w.Publisher.PublishCampaignStats(ctx, &queue.CampaignStatsUpdate{
-			CampaignID:     campaignID.String(),
-			OrganizationID: campaign.OrganizationID,
-			Status:         "processing",
-			SentCount:      sentCount,
-			DeliveredCount: 0,
-			ReadCount:      0,
-			FailedCount:    failedCount,
-		})
-
-		// Small delay to avoid rate limiting (WhatsApp has rate limits)
-		time.Sleep(100 * time.Millisecond)
+		message.Content = content
 	}
 
-	// Mark campaign as completed
-	now := time.Now()
-	w.DB.Model(&campaign).Updates(map[string]interface{}{
-		"status":       "completed",
-		"completed_at": now,
-		"sent_count":   sentCount,
-		"failed_count": failedCount,
-	})
+	if err != nil {
+		w.Log.Error("Failed to send message", "error", err, "recipient", job.PhoneNumber)
+		message.Status = "failed"
+		message.ErrorMessage = err.Error()
+		w.updateRecipientStatus(job.RecipientID, "failed", "", err.Error())
+		w.incrementCampaignCount(job.CampaignID, "failed_count")
+	} else {
+		w.Log.Info("Message sent", "recipient", job.PhoneNumber, "message_id", waMessageID)
+		message.Status = "sent"
+		w.updateRecipientStatus(job.RecipientID, "sent", waMessageID, "")
+		w.incrementCampaignCount(job.CampaignID, "sent_count")
+	}
 
-	// Publish completion status via Redis pub/sub
+	// Save message record
+	if err := w.DB.Create(&message).Error; err != nil {
+		w.Log.Error("Failed to save message", "error", err, "recipient", job.PhoneNumber)
+	}
+
+	// Check if campaign is complete (all recipients processed)
+	w.checkCampaignCompletion(ctx, job.CampaignID, job.OrganizationID)
+
+	return nil
+}
+
+// updateRecipientStatus updates the recipient's status in the database
+func (w *Worker) updateRecipientStatus(recipientID uuid.UUID, status, waMessageID, errorMsg string) {
+	updates := map[string]interface{}{
+		"status":               status,
+		"whats_app_message_id": waMessageID,
+	}
+	if status == "sent" {
+		updates["sent_at"] = time.Now()
+	}
+	if errorMsg != "" {
+		updates["error_message"] = errorMsg
+	}
+	w.DB.Model(&models.BulkMessageRecipient{}).Where("id = ?", recipientID).Updates(updates)
+}
+
+// incrementCampaignCount increments a campaign counter atomically
+func (w *Worker) incrementCampaignCount(campaignID uuid.UUID, column string) {
+	w.DB.Model(&models.BulkMessageCampaign{}).
+		Where("id = ?", campaignID).
+		Update(column, gorm.Expr(column+" + 1"))
+}
+
+// publishCampaignStats publishes campaign stats for real-time updates
+func (w *Worker) publishCampaignStats(ctx context.Context, campaignID, organizationID uuid.UUID) {
+	var campaign models.BulkMessageCampaign
+	if err := w.DB.Where("id = ?", campaignID).First(&campaign).Error; err != nil {
+		return
+	}
+
 	w.Publisher.PublishCampaignStats(ctx, &queue.CampaignStatsUpdate{
 		CampaignID:     campaignID.String(),
-		OrganizationID: campaign.OrganizationID,
-		Status:         "completed",
-		SentCount:      sentCount,
-		DeliveredCount: 0,
-		ReadCount:      0,
-		FailedCount:    failedCount,
+		OrganizationID: organizationID,
+		Status:         campaign.Status,
+		SentCount:      campaign.SentCount,
+		DeliveredCount: campaign.DeliveredCount,
+		ReadCount:      campaign.ReadCount,
+		FailedCount:    campaign.FailedCount,
 	})
+}
 
-	w.Log.Info("Campaign completed", "campaign_id", campaignID, "sent", sentCount, "failed", failedCount)
-	return nil
+// checkCampaignCompletion checks if all recipients are processed and marks campaign as completed
+func (w *Worker) checkCampaignCompletion(ctx context.Context, campaignID, organizationID uuid.UUID) {
+	// Count pending recipients
+	var pendingCount int64
+	w.DB.Model(&models.BulkMessageRecipient{}).
+		Where("campaign_id = ? AND status = ?", campaignID, "pending").
+		Count(&pendingCount)
+
+	// If no pending recipients, mark campaign as completed
+	if pendingCount == 0 {
+		var campaign models.BulkMessageCampaign
+		if err := w.DB.Where("id = ?", campaignID).First(&campaign).Error; err != nil {
+			return
+		}
+
+		// Only complete if currently processing
+		if campaign.Status != "processing" {
+			return
+		}
+
+		now := time.Now()
+		w.DB.Model(&campaign).Updates(map[string]interface{}{
+			"status":       "completed",
+			"completed_at": now,
+		})
+
+		w.Log.Info("Campaign completed", "campaign_id", campaignID, "sent", campaign.SentCount, "failed", campaign.FailedCount)
+
+		// Publish completion status
+		w.Publisher.PublishCampaignStats(ctx, &queue.CampaignStatsUpdate{
+			CampaignID:     campaignID.String(),
+			OrganizationID: organizationID,
+			Status:         "completed",
+			SentCount:      campaign.SentCount,
+			DeliveredCount: campaign.DeliveredCount,
+			ReadCount:      campaign.ReadCount,
+			FailedCount:    campaign.FailedCount,
+		})
+	} else {
+		// Publish current stats
+		w.publishCampaignStats(ctx, campaignID, organizationID)
+	}
 }
 
 // sendTemplateMessage sends a template message via WhatsApp Cloud API

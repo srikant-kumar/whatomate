@@ -7,7 +7,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/zerodha/logf"
 )
@@ -40,32 +39,66 @@ func NewRedisQueue(client *redis.Client, log logf.Logger) *RedisQueue {
 	}
 }
 
-// EnqueueCampaign adds a campaign processing job to the queue
-func (q *RedisQueue) EnqueueCampaign(ctx context.Context, campaignID uuid.UUID) error {
-	job := CampaignJob{
-		CampaignID: campaignID,
-		EnqueuedAt: time.Now(),
+// EnqueueRecipient adds a single recipient job to the queue
+func (q *RedisQueue) EnqueueRecipient(ctx context.Context, job *RecipientJob) error {
+	if job.EnqueuedAt.IsZero() {
+		job.EnqueuedAt = time.Now()
 	}
 
 	payload, err := json.Marshal(job)
 	if err != nil {
-		return fmt.Errorf("failed to marshal job: %w", err)
+		return fmt.Errorf("failed to marshal recipient job: %w", err)
 	}
 
-	// Add to stream using XADD
-	result, err := q.client.XAdd(ctx, &redis.XAddArgs{
+	_, err = q.client.XAdd(ctx, &redis.XAddArgs{
 		Stream: StreamName,
 		Values: map[string]interface{}{
-			"type":    string(JobTypeCampaign),
+			"type":    string(JobTypeRecipient),
 			"payload": string(payload),
 		},
 	}).Result()
 
 	if err != nil {
-		return fmt.Errorf("failed to enqueue campaign job: %w", err)
+		return fmt.Errorf("failed to enqueue recipient job: %w", err)
 	}
 
-	q.log.Info("Campaign job enqueued", "campaign_id", campaignID, "message_id", result)
+	return nil
+}
+
+// EnqueueRecipients adds multiple recipient jobs to the queue using pipeline
+func (q *RedisQueue) EnqueueRecipients(ctx context.Context, jobs []*RecipientJob) error {
+	if len(jobs) == 0 {
+		return nil
+	}
+
+	pipe := q.client.Pipeline()
+	now := time.Now()
+
+	for _, job := range jobs {
+		if job.EnqueuedAt.IsZero() {
+			job.EnqueuedAt = now
+		}
+
+		payload, err := json.Marshal(job)
+		if err != nil {
+			return fmt.Errorf("failed to marshal recipient job: %w", err)
+		}
+
+		pipe.XAdd(ctx, &redis.XAddArgs{
+			Stream: StreamName,
+			Values: map[string]interface{}{
+				"type":    string(JobTypeRecipient),
+				"payload": string(payload),
+			},
+		})
+	}
+
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to enqueue recipient jobs: %w", err)
+	}
+
+	q.log.Info("Recipient jobs enqueued", "count", len(jobs), "campaign_id", jobs[0].CampaignID)
 	return nil
 }
 
@@ -105,8 +138,8 @@ func NewRedisConsumer(client *redis.Client, log logf.Logger) (*RedisConsumer, er
 }
 
 // Consume starts consuming jobs from the queue
-func (c *RedisConsumer) Consume(ctx context.Context, handler func(ctx context.Context, job *CampaignJob) error) error {
-	c.log.Info("Starting to consume campaign jobs", "consumer_id", c.consumerID)
+func (c *RedisConsumer) Consume(ctx context.Context, handler JobHandler) error {
+	c.log.Info("Starting to consume jobs", "consumer_id", c.consumerID)
 
 	// First, try to claim any stale pending messages from crashed workers
 	if err := c.claimPendingMessages(ctx, handler); err != nil {
@@ -161,7 +194,7 @@ func (c *RedisConsumer) Consume(ctx context.Context, handler func(ctx context.Co
 }
 
 // claimPendingMessages claims stale pending messages from crashed workers
-func (c *RedisConsumer) claimPendingMessages(ctx context.Context, handler func(ctx context.Context, job *CampaignJob) error) error {
+func (c *RedisConsumer) claimPendingMessages(ctx context.Context, handler JobHandler) error {
 	// Get pending messages that have been idle for too long
 	pending, err := c.client.XPendingExt(ctx, &redis.XPendingExtArgs{
 		Stream: StreamName,
@@ -215,14 +248,10 @@ func (c *RedisConsumer) claimPendingMessages(ctx context.Context, handler func(c
 }
 
 // processMessage processes a single message from the stream
-func (c *RedisConsumer) processMessage(ctx context.Context, msg redis.XMessage, handler func(ctx context.Context, job *CampaignJob) error) error {
+func (c *RedisConsumer) processMessage(ctx context.Context, msg redis.XMessage, handler JobHandler) error {
 	jobType, ok := msg.Values["type"].(string)
 	if !ok {
 		return fmt.Errorf("invalid message: missing type")
-	}
-
-	if JobType(jobType) != JobTypeCampaign {
-		return fmt.Errorf("unknown job type: %s", jobType)
 	}
 
 	payload, ok := msg.Values["payload"].(string)
@@ -230,14 +259,18 @@ func (c *RedisConsumer) processMessage(ctx context.Context, msg redis.XMessage, 
 		return fmt.Errorf("invalid message: missing payload")
 	}
 
-	var job CampaignJob
-	if err := json.Unmarshal([]byte(payload), &job); err != nil {
-		return fmt.Errorf("failed to unmarshal job: %w", err)
+	switch JobType(jobType) {
+	case JobTypeRecipient:
+		var job RecipientJob
+		if err := json.Unmarshal([]byte(payload), &job); err != nil {
+			return fmt.Errorf("failed to unmarshal recipient job: %w", err)
+		}
+		c.log.Debug("Processing recipient job", "campaign_id", job.CampaignID, "recipient_id", job.RecipientID, "message_id", msg.ID)
+		return handler.HandleRecipientJob(ctx, &job)
+
+	default:
+		return fmt.Errorf("unknown job type: %s", jobType)
 	}
-
-	c.log.Info("Processing campaign job", "campaign_id", job.CampaignID, "message_id", msg.ID)
-
-	return handler(ctx, &job)
 }
 
 // Close closes the consumer connection

@@ -1,15 +1,12 @@
 package handlers
 
 import (
-	"context"
-	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/shridarpatil/whatomate/internal/models"
+	"github.com/shridarpatil/whatomate/internal/queue"
 	"github.com/shridarpatil/whatomate/internal/websocket"
-	"github.com/shridarpatil/whatomate/pkg/whatsapp"
 	"github.com/valyala/fasthttp"
 	"github.com/zerodha/fastglue"
 	"gorm.io/gorm"
@@ -374,17 +371,21 @@ func (a *App) StartCampaign(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Campaign cannot be started in current state", nil, "")
 	}
 
-	// Check if there are recipients
-	var recipientCount int64
-	a.DB.Model(&models.BulkMessageRecipient{}).Where("campaign_id = ?", id).Count(&recipientCount)
-	if recipientCount == 0 {
-		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Campaign has no recipients", nil, "")
+	// Get all pending recipients
+	var recipients []models.BulkMessageRecipient
+	if err := a.DB.Where("campaign_id = ? AND status = ?", id, "pending").Find(&recipients).Error; err != nil {
+		a.Log.Error("Failed to load recipients", "error", err)
+		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to load recipients", nil, "")
 	}
 
-	// Update status
+	if len(recipients) == 0 {
+		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Campaign has no pending recipients", nil, "")
+	}
+
+	// Update status to processing
 	now := time.Now()
 	updates := map[string]interface{}{
-		"status":     "queued",
+		"status":     "processing",
 		"started_at": now,
 	}
 
@@ -393,23 +394,33 @@ func (a *App) StartCampaign(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to start campaign", nil, "")
 	}
 
-	a.Log.Info("Campaign started", "campaign_id", id)
+	a.Log.Info("Campaign started", "campaign_id", id, "recipients", len(recipients))
 
-	// Enqueue campaign for processing by worker
-	if a.Queue != nil {
-		if err := a.Queue.EnqueueCampaign(r.RequestCtx, id); err != nil {
-			a.Log.Error("Failed to enqueue campaign", "error", err)
-			return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to queue campaign", nil, "")
+	// Enqueue all recipients as individual jobs for parallel processing
+	jobs := make([]*queue.RecipientJob, len(recipients))
+	for i, recipient := range recipients {
+		jobs[i] = &queue.RecipientJob{
+			CampaignID:     id,
+			RecipientID:    recipient.ID,
+			OrganizationID: orgID,
+			PhoneNumber:    recipient.PhoneNumber,
+			RecipientName:  recipient.RecipientName,
+			TemplateParams: recipient.TemplateParams,
 		}
-	} else {
-		// Fallback to goroutine if queue is not configured (for backwards compatibility)
-		a.Log.Warn("Queue not configured, processing campaign in goroutine")
-		go a.processCampaign(id)
 	}
+
+	if err := a.Queue.EnqueueRecipients(r.RequestCtx, jobs); err != nil {
+		a.Log.Error("Failed to enqueue recipients", "error", err)
+		// Revert status on failure
+		a.DB.Model(&campaign).Update("status", "draft")
+		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to queue recipients", nil, "")
+	}
+
+	a.Log.Info("Recipients enqueued for processing", "campaign_id", id, "count", len(jobs))
 
 	return r.SendEnvelope(map[string]interface{}{
 		"message": "Campaign started",
-		"status":  "queued",
+		"status":  "processing",
 	})
 }
 
@@ -506,11 +517,14 @@ func (a *App) RetryFailed(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Can only retry failed messages on completed, paused, or failed campaigns", nil, "")
 	}
 
-	// Count failed recipients
-	var failedCount int64
-	a.DB.Model(&models.BulkMessageRecipient{}).Where("campaign_id = ? AND status = ?", id, "failed").Count(&failedCount)
+	// Get failed recipients
+	var failedRecipients []models.BulkMessageRecipient
+	if err := a.DB.Where("campaign_id = ? AND status = ?", id, "failed").Find(&failedRecipients).Error; err != nil {
+		a.Log.Error("Failed to load failed recipients", "error", err)
+		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to load failed recipients", nil, "")
+	}
 
-	if failedCount == 0 {
+	if len(failedRecipients) == 0 {
 		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "No failed messages to retry", nil, "")
 	}
 
@@ -538,28 +552,38 @@ func (a *App) RetryFailed(r *fastglue.Request) error {
 	// Recalculate campaign stats from messages table
 	a.recalculateCampaignStats(id)
 
-	// Update campaign status to queued
-	if err := a.DB.Model(&campaign).Update("status", "queued").Error; err != nil {
+	// Update campaign status to processing
+	if err := a.DB.Model(&campaign).Update("status", "processing").Error; err != nil {
 		a.Log.Error("Failed to update campaign status", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to update campaign", nil, "")
 	}
 
-	a.Log.Info("Retrying failed messages", "campaign_id", id, "failed_count", failedCount)
+	a.Log.Info("Retrying failed messages", "campaign_id", id, "failed_count", len(failedRecipients))
 
-	// Enqueue campaign for processing
-	if a.Queue != nil {
-		if err := a.Queue.EnqueueCampaign(r.RequestCtx, id); err != nil {
-			a.Log.Error("Failed to enqueue campaign", "error", err)
-			return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to queue campaign", nil, "")
+	// Enqueue failed recipients as individual jobs for parallel processing
+	jobs := make([]*queue.RecipientJob, len(failedRecipients))
+	for i, recipient := range failedRecipients {
+		jobs[i] = &queue.RecipientJob{
+			CampaignID:     id,
+			RecipientID:    recipient.ID,
+			OrganizationID: orgID,
+			PhoneNumber:    recipient.PhoneNumber,
+			RecipientName:  recipient.RecipientName,
+			TemplateParams: recipient.TemplateParams,
 		}
-	} else {
-		go a.processCampaign(id)
 	}
+
+	if err := a.Queue.EnqueueRecipients(r.RequestCtx, jobs); err != nil {
+		a.Log.Error("Failed to enqueue recipients for retry", "error", err)
+		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to queue recipients", nil, "")
+	}
+
+	a.Log.Info("Failed recipients enqueued for retry", "campaign_id", id, "count", len(jobs))
 
 	return r.SendEnvelope(map[string]interface{}{
 		"message":     "Retrying failed messages",
-		"retry_count": failedCount,
-		"status":      "queued",
+		"retry_count": len(failedRecipients),
+		"status":      "processing",
 	})
 }
 
@@ -668,174 +692,6 @@ func (a *App) getUserIDFromContext(r *fastglue.Request) (uuid.UUID, error) {
 	return userID, nil
 }
 
-// processCampaign processes a campaign by sending messages to all recipients
-func (a *App) processCampaign(campaignID uuid.UUID) {
-	a.Log.Info("Processing campaign", "campaign_id", campaignID)
-
-	// Get campaign with template
-	var campaign models.BulkMessageCampaign
-	if err := a.DB.Where("id = ?", campaignID).Preload("Template").First(&campaign).Error; err != nil {
-		a.Log.Error("Failed to load campaign for processing", "error", err, "campaign_id", campaignID)
-		return
-	}
-
-	// Get WhatsApp account
-	var account models.WhatsAppAccount
-	if err := a.DB.Where("name = ? AND organization_id = ?", campaign.WhatsAppAccount, campaign.OrganizationID).First(&account).Error; err != nil {
-		a.Log.Error("Failed to load WhatsApp account", "error", err, "account_name", campaign.WhatsAppAccount)
-		a.DB.Model(&campaign).Update("status", "failed")
-		return
-	}
-
-	// Update status to processing
-	a.DB.Model(&campaign).Update("status", "processing")
-
-	// Get all pending recipients
-	var recipients []models.BulkMessageRecipient
-	if err := a.DB.Where("campaign_id = ? AND status = ?", campaignID, "pending").Find(&recipients).Error; err != nil {
-		a.Log.Error("Failed to load recipients", "error", err, "campaign_id", campaignID)
-		a.DB.Model(&campaign).Update("status", "failed")
-		return
-	}
-
-	a.Log.Info("Processing recipients", "campaign_id", campaignID, "count", len(recipients))
-
-	sentCount := 0
-	failedCount := 0
-
-	for _, recipient := range recipients {
-		// Check if campaign is still active (not paused/cancelled)
-		var currentCampaign models.BulkMessageCampaign
-		a.DB.Where("id = ?", campaignID).First(&currentCampaign)
-		if currentCampaign.Status == "paused" || currentCampaign.Status == "cancelled" {
-			a.Log.Info("Campaign stopped", "campaign_id", campaignID, "status", currentCampaign.Status)
-			return
-		}
-
-		// Get or create contact for this recipient
-		contact, _ := a.getOrCreateContact(campaign.OrganizationID, recipient.PhoneNumber, recipient.RecipientName)
-		if contact == nil {
-			a.Log.Error("Failed to get or create contact", "phone", recipient.PhoneNumber)
-			a.DB.Model(&recipient).Updates(map[string]interface{}{
-				"status":        "failed",
-				"error_message": "Failed to create contact",
-			})
-			failedCount++
-			continue
-		}
-
-		// Send template message
-		waMessageID, err := a.sendTemplateMessage(&account, campaign.Template, &recipient)
-
-		// Create Message record with campaign_id in metadata
-		message := models.Message{
-			OrganizationID:    campaign.OrganizationID,
-			WhatsAppAccount:   campaign.WhatsAppAccount,
-			ContactID:         contact.ID,
-			WhatsAppMessageID: waMessageID,
-			Direction:         "outgoing",
-			MessageType:       "template",
-			TemplateParams:    recipient.TemplateParams,
-			Metadata: models.JSONB{
-				"campaign_id":    campaignID.String(),
-				"recipient_name": recipient.RecipientName,
-			},
-		}
-		if campaign.Template != nil {
-			message.TemplateName = campaign.Template.Name
-			// Store template body with substituted values for display in chat
-			content := campaign.Template.BodyContent
-			// Replace placeholders {{1}}, {{2}}, etc. with actual values
-			if recipient.TemplateParams != nil {
-				for i := 1; i <= 10; i++ {
-					key := fmt.Sprintf("%d", i)
-					if val, ok := recipient.TemplateParams[key]; ok {
-						placeholder := fmt.Sprintf("{{%d}}", i)
-						content = strings.ReplaceAll(content, placeholder, fmt.Sprintf("%v", val))
-					}
-				}
-			}
-			message.Content = content
-		}
-
-		if err != nil {
-			a.Log.Error("Failed to send message", "error", err, "recipient", recipient.PhoneNumber)
-			message.Status = "failed"
-			message.ErrorMessage = err.Error()
-			failedCount++
-		} else {
-			a.Log.Info("Message sent", "recipient", recipient.PhoneNumber, "message_id", waMessageID)
-			message.Status = "sent"
-			sentCount++
-		}
-
-		// Save message record
-		if err := a.DB.Create(&message).Error; err != nil {
-			a.Log.Error("Failed to save campaign message", "error", err, "recipient", recipient.PhoneNumber)
-		}
-
-		// Update BulkMessageRecipient status to track which recipients have been processed
-		recipientUpdate := map[string]interface{}{
-			"status":               message.Status,
-			"whats_app_message_id": waMessageID,
-		}
-		if message.Status == "failed" {
-			recipientUpdate["error_message"] = message.ErrorMessage
-		}
-		a.DB.Model(&recipient).Updates(recipientUpdate)
-
-		// Update campaign counts
-		a.DB.Model(&campaign).Updates(map[string]interface{}{
-			"sent_count":   sentCount,
-			"failed_count": failedCount,
-		})
-
-		// Broadcast stats update via WebSocket
-		if a.WSHub != nil {
-			a.WSHub.BroadcastToOrg(campaign.OrganizationID, websocket.WSMessage{
-				Type: websocket.TypeCampaignStatsUpdate,
-				Payload: map[string]interface{}{
-					"campaign_id":     campaignID.String(),
-					"status":          "processing",
-					"sent_count":      sentCount,
-					"delivered_count": 0,
-					"read_count":      0,
-					"failed_count":    failedCount,
-				},
-			})
-		}
-
-		// Small delay to avoid rate limiting (WhatsApp has rate limits)
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	// Mark campaign as completed
-	now := time.Now()
-	a.DB.Model(&campaign).Updates(map[string]interface{}{
-		"status":       "completed",
-		"completed_at": now,
-		"sent_count":   sentCount,
-		"failed_count": failedCount,
-	})
-
-	// Broadcast completion via WebSocket
-	if a.WSHub != nil {
-		a.WSHub.BroadcastToOrg(campaign.OrganizationID, websocket.WSMessage{
-			Type: websocket.TypeCampaignStatsUpdate,
-			Payload: map[string]interface{}{
-				"campaign_id":     campaignID.String(),
-				"status":          "completed",
-				"sent_count":      sentCount,
-				"delivered_count": 0,
-				"read_count":      0,
-				"failed_count":    failedCount,
-			},
-		})
-	}
-
-	a.Log.Info("Campaign completed", "campaign_id", campaignID, "sent", sentCount, "failed", failedCount)
-}
-
 // incrementCampaignStat increments the appropriate campaign counter based on status
 func (a *App) incrementCampaignStat(campaignID string, status string) {
 	campaignUUID, err := uuid.Parse(campaignID)
@@ -911,38 +767,3 @@ func (a *App) recalculateCampaignStats(campaignID uuid.UUID) {
 	}
 }
 
-// sendTemplateMessage sends a template message via WhatsApp Cloud API
-func (a *App) sendTemplateMessage(account *models.WhatsAppAccount, template *models.Template, recipient *models.BulkMessageRecipient) (string, error) {
-	waAccount := &whatsapp.Account{
-		PhoneID:     account.PhoneID,
-		BusinessID:  account.BusinessID,
-		APIVersion:  account.APIVersion,
-		AccessToken: account.AccessToken,
-	}
-
-	// Build template components with parameters
-	var components []map[string]interface{}
-
-	// Add body parameters if template has variables
-	if recipient.TemplateParams != nil && len(recipient.TemplateParams) > 0 {
-		bodyParams := []map[string]interface{}{}
-		for i := 1; i <= 10; i++ {
-			key := fmt.Sprintf("%d", i)
-			if val, ok := recipient.TemplateParams[key]; ok {
-				bodyParams = append(bodyParams, map[string]interface{}{
-					"type": "text",
-					"text": val,
-				})
-			}
-		}
-		if len(bodyParams) > 0 {
-			components = append(components, map[string]interface{}{
-				"type":       "body",
-				"parameters": bodyParams,
-			})
-		}
-	}
-
-	ctx := context.Background()
-	return a.WhatsApp.SendTemplateMessageWithComponents(ctx, waAccount, recipient.PhoneNumber, template.Name, template.Language, components)
-}
