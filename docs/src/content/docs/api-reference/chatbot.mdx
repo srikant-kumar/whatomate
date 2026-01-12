@@ -258,6 +258,22 @@ POST /api/chatbot/flows
   "initial_message": "Hi! I'd like to collect your feedback.",
   "completion_message": "Thank you for your feedback!",
   "enabled": true,
+  "panel_config": {
+    "sections": [
+      {
+        "id": "customer",
+        "label": "Customer Info",
+        "columns": 1,
+        "collapsible": true,
+        "default_collapsed": false,
+        "order": 1,
+        "fields": [
+          {"key": "rating", "label": "Rating", "order": 1},
+          {"key": "comment", "label": "Comment", "order": 2}
+        ]
+      }
+    ]
+  },
   "steps": [
     {
       "step_name": "rating",
@@ -323,6 +339,51 @@ The `transfer` message type ends the flow and creates an agent transfer:
 |-------|-------------|
 | `team_id` | Target team UUID (omit for general queue) |
 | `notes` | Internal notes for agents (supports `{{variable}}` placeholders) |
+
+### Panel Configuration
+
+Configure which session variables are displayed in the Contact Info Panel:
+
+```json
+{
+  "panel_config": {
+    "sections": [
+      {
+        "id": "section-1",
+        "label": "Customer Info",
+        "columns": 1,
+        "collapsible": true,
+        "default_collapsed": false,
+        "order": 1,
+        "fields": [
+          {"key": "customer_name", "label": "Name", "order": 1},
+          {"key": "customer_email", "label": "Email", "order": 2}
+        ]
+      }
+    ]
+  }
+}
+```
+
+#### Section Properties
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique section identifier |
+| `label` | string | Display label for the section |
+| `columns` | number | Layout columns (1 or 2) |
+| `collapsible` | boolean | Allow section to be collapsed |
+| `default_collapsed` | boolean | Start section in collapsed state |
+| `order` | number | Section display order |
+| `fields` | array | Fields to display in this section |
+
+#### Field Properties
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `key` | string | Session variable name (from `store_as` or response mapping) |
+| `label` | string | Display label for the field |
+| `order` | number | Field display order within section |
 
 ## Agent Transfers
 

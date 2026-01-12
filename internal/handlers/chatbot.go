@@ -679,6 +679,7 @@ func (a *App) CreateChatbotFlow(r *fastglue.Request) error {
 		CompletionMessage string                 `json:"completion_message"`
 		OnCompleteAction  string                 `json:"on_complete_action"`
 		CompletionConfig  map[string]interface{} `json:"completion_config"`
+		PanelConfig       map[string]interface{} `json:"panel_config"`
 		Enabled           bool                   `json:"enabled"`
 		Steps             []FlowStepRequest      `json:"steps"`
 	}
@@ -705,6 +706,7 @@ func (a *App) CreateChatbotFlow(r *fastglue.Request) error {
 		CompletionMessage: req.CompletionMessage,
 		OnCompleteAction:  req.OnCompleteAction,
 		CompletionConfig:  models.JSONB(req.CompletionConfig),
+		PanelConfig:       models.JSONB(req.PanelConfig),
 		IsEnabled:         req.Enabled,
 	}
 
@@ -816,6 +818,7 @@ func (a *App) UpdateChatbotFlow(r *fastglue.Request) error {
 		CompletionMessage *string                `json:"completion_message"`
 		OnCompleteAction  *string                `json:"on_complete_action"`
 		CompletionConfig  map[string]interface{} `json:"completion_config"`
+		PanelConfig       map[string]interface{} `json:"panel_config"`
 		Enabled           *bool                  `json:"enabled"`
 		Steps             []FlowStepRequest      `json:"steps"`
 	}
@@ -846,6 +849,9 @@ func (a *App) UpdateChatbotFlow(r *fastglue.Request) error {
 	}
 	if req.CompletionConfig != nil {
 		flow.CompletionConfig = models.JSONB(req.CompletionConfig)
+	}
+	if req.PanelConfig != nil {
+		flow.PanelConfig = models.JSONB(req.PanelConfig)
 	}
 	if req.Enabled != nil {
 		flow.IsEnabled = *req.Enabled

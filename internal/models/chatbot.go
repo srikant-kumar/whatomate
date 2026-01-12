@@ -55,6 +55,29 @@ type AIConfig struct {
 	HistoryLimit   int     `gorm:"column:ai_history_limit;default:4" json:"ai_history_limit"`
 }
 
+// PanelFieldConfig defines a field to display in the contact info panel
+type PanelFieldConfig struct {
+	Key   string `json:"key"`   // Variable name (from StoreAs or response_mapping)
+	Label string `json:"label"` // Admin-defined display label
+	Order int    `json:"order"` // Field order within section
+}
+
+// PanelSection defines a section in the contact info panel
+type PanelSection struct {
+	ID               string             `json:"id"`                // Unique section ID
+	Label            string             `json:"label"`             // Admin-defined section label
+	Columns          int                `json:"columns"`           // 1 or 2 columns layout
+	Collapsible      bool               `json:"collapsible"`       // Can section be collapsed
+	DefaultCollapsed bool               `json:"default_collapsed"` // Start collapsed
+	Order            int                `json:"order"`             // Section display order
+	Fields           []PanelFieldConfig `json:"fields"`            // Fields in this section
+}
+
+// PanelConfig defines the contact info panel configuration for a flow
+type PanelConfig struct {
+	Sections []PanelSection `json:"sections"`
+}
+
 // ChatbotSettings holds chatbot configuration per WhatsApp account
 // WhatsAppAccount can be empty for organization-level default settings
 type ChatbotSettings struct {
@@ -131,6 +154,7 @@ type ChatbotFlow struct {
 	CompletionConfig   JSONB       `gorm:"type:jsonb" json:"completion_config"`
 	TimeoutMessage     string      `gorm:"type:text" json:"timeout_message"`
 	CancelKeywords     StringArray `gorm:"type:jsonb" json:"cancel_keywords"`
+	PanelConfig        JSONB       `gorm:"type:jsonb;default:'{}'" json:"panel_config"` // Contact info panel configuration
 
 	// Relations
 	Organization    *Organization     `gorm:"foreignKey:OrganizationID" json:"organization,omitempty"`

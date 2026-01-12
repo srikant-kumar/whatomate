@@ -948,7 +948,10 @@ func (a *App) startFlow(account *models.WhatsAppAccount, session *models.Chatbot
 	session.CurrentFlowID = &flow.ID
 	session.CurrentStep = ""
 	session.StepRetries = 0
-	session.SessionData = models.JSONB{}
+	session.SessionData = models.JSONB{
+		"_flow_id":   flow.ID.String(),
+		"_flow_name": flow.Name,
+	}
 	a.DB.Save(session)
 
 	// Send initial message if configured
@@ -1193,13 +1196,12 @@ func (a *App) completeFlow(account *models.WhatsAppAccount, session *models.Chat
 		go a.sendFlowCompletionWebhook(flow, session, contact)
 	}
 
-	// Update session
+	// Update session (keep current_flow_id for panel config reference)
 	now := time.Now()
 	a.DB.Model(session).Updates(map[string]interface{}{
-		"current_flow_id": nil,
-		"current_step":    "",
-		"status":          models.SessionStatusCompleted,
-		"completed_at":    now,
+		"current_step": "",
+		"status":       models.SessionStatusCompleted,
+		"completed_at": now,
 	})
 
 	// Clear chatbot tracking so SLA doesn't fire after flow completion
@@ -1301,13 +1303,18 @@ func (a *App) sendFlowCompletionWebhook(flow *models.ChatbotFlow, session *model
 	}
 }
 
-// exitFlow clears flow state from session without completion
+// exitFlow ends a flow session (transfer, cancel, or error)
 func (a *App) exitFlow(session *models.ChatbotSession) {
+	now := time.Now()
 	a.DB.Model(session).Updates(map[string]interface{}{
-		"current_flow_id": nil,
-		"current_step":    "",
-		"step_retries":    0,
+		"current_step": "",
+		"step_retries": 0,
+		"status":       models.SessionStatusCompleted,
+		"completed_at": now,
 	})
+
+	// Clear chatbot tracking so SLA doesn't fire after flow exit
+	a.ClearContactChatbotTracking(session.ContactID)
 }
 
 // closeSession ends the chatbot session and clears contact tracking

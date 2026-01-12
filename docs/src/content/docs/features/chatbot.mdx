@@ -300,6 +300,77 @@ Total P&L: {{if total_negative}}🔴{{else}}🟢{{endif}} ₹{{total_pnl}}
   Variables set via response mapping are stored in the session and available in all subsequent steps, not just the current API fetch step.
 </Aside>
 
+## Contact Info Panel
+
+Display collected session data in a side panel when viewing a contact in the chat view. This allows agents to see customer information collected during chatbot flows at a glance.
+
+### How It Works
+
+Data is collected from two sources:
+- **User Input** - Fields stored via the `Store as` option in flow steps
+- **API Data** - Fields extracted via `Response Mapping` in API fetch steps
+
+All collected data is stored in the session and can be configured to display in the Contact Info Panel.
+
+### Configuring the Panel
+
+In the Flow Builder, scroll down to the **Panel Display Settings** section:
+
+<Steps>
+
+1. **View Available Variables**
+
+   The panel shows all variables collected in the flow:
+   - Variables from `Store as` fields in input steps
+   - Variables from `Response Mapping` in API fetch steps
+
+2. **Add Sections**
+
+   Click "Add Section" to create display sections. Each section can have:
+   - **Label** - Custom section name (e.g., "Customer Info", "Order Details")
+   - **Columns** - 1 or 2 column layout
+   - **Collapsible** - Allow section to be expanded/collapsed
+   - **Default Collapsed** - Start section in collapsed state
+
+3. **Add Fields to Sections**
+
+   For each section, add fields from the available variables:
+   - **Variable** - Select from available session variables
+   - **Label** - Display label for the field (e.g., "Name", "Email", "Order ID")
+
+4. **Reorder Sections and Fields**
+
+   Drag sections and fields to reorder them as needed.
+
+</Steps>
+
+### Panel Features
+
+| Feature | Description |
+|---------|-------------|
+| **Resizable** | Drag the left edge to resize the panel width |
+| **Auto-Open** | Panel automatically opens when viewing contacts with configured data |
+| **Collapsible Sections** | Expand/collapse sections to focus on relevant information |
+| **Multi-Column Layout** | Display fields in 1 or 2 columns per section |
+
+### Example Configuration
+
+For a customer support flow that collects name, email, and order details:
+
+**Section 1: Customer Info** (1 column)
+- `customer_name` → "Name"
+- `customer_email` → "Email"
+
+**Section 2: Order Details** (2 columns, collapsible)
+- `order_id` → "Order ID"
+- `order_status` → "Status"
+- `order_date` → "Date"
+- `order_total` → "Total"
+
+<Aside type="tip">
+  Use 2-column layouts for sections with many short fields like order details. Use 1-column layouts for sections with longer values like addresses or descriptions.
+</Aside>
+
 ## Agent Transfers
 
 Hand off conversations from the chatbot to human agents when needed.

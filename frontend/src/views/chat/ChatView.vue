@@ -52,7 +52,6 @@ import {
   Smile,
   MoreVertical,
   Phone,
-  Video,
   Check,
   CheckCheck,
   Clock,
@@ -80,6 +79,8 @@ import {
 import { formatTime, getInitials, truncate } from '@/lib/utils'
 import { useColorMode } from '@/composables/useColorMode'
 import CannedResponsePicker from '@/components/chat/CannedResponsePicker.vue'
+import ContactInfoPanel from '@/components/chat/ContactInfoPanel.vue'
+import { Info } from 'lucide-vue-next'
 
 const route = useRoute()
 const router = useRouter()
@@ -97,6 +98,7 @@ const isSending = ref(false)
 const isAssignDialogOpen = ref(false)
 const isTransferring = ref(false)
 const isResuming = ref(false)
+const isInfoPanelOpen = ref(false)
 
 // File upload state
 const fileInputRef = ref<HTMLInputElement | null>(null)
@@ -435,6 +437,17 @@ async function selectContact(id: string) {
       // Setup scroll listener for infinite scroll after initial scroll
       setupScrollListener()
     }, 50)
+
+    // Auto-open contact info panel if panel sections are configured
+    try {
+      const response = await contactsService.getSessionData(id)
+      const sessionData = response.data.data || response.data
+      if (sessionData?.panel_config?.sections?.length > 0) {
+        isInfoPanelOpen.value = true
+      }
+    } catch {
+      // Ignore errors - panel just won't auto-open
+    }
   }
 }
 
@@ -1221,22 +1234,6 @@ async function sendMediaMessage() {
               </TooltipTrigger>
               <TooltipContent>Assign to agent</TooltipContent>
             </Tooltip>
-            <Tooltip>
-              <TooltipTrigger as-child>
-                <Button variant="ghost" size="icon" class="h-8 w-8">
-                  <Phone class="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Voice call</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger as-child>
-                <Button variant="ghost" size="icon" class="h-8 w-8">
-                  <Video class="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Video call</TooltipContent>
-            </Tooltip>
             <Tooltip v-if="activeTransferId">
               <TooltipTrigger as-child>
                 <Button variant="ghost" size="icon" class="h-8 w-8" :disabled="isResuming" @click="resumeChatbot">
@@ -1261,6 +1258,20 @@ async function sendMediaMessage() {
               </TooltipTrigger>
               <TooltipContent>{{ action.name }}</TooltipContent>
             </Tooltip>
+            <Tooltip>
+              <TooltipTrigger as-child>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  class="h-8 w-8"
+                  :class="isInfoPanelOpen && 'bg-accent'"
+                  @click="isInfoPanelOpen = !isInfoPanelOpen"
+                >
+                  <Info class="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Contact Info</TooltipContent>
+            </Tooltip>
             <DropdownMenu>
               <DropdownMenuTrigger as-child>
                 <Button variant="ghost" size="icon" class="h-8 w-8">
@@ -1282,9 +1293,9 @@ async function sendMediaMessage() {
                   <Play class="mr-2 h-4 w-4" />
                   <span>Resume Chatbot</span>
                 </DropdownMenuItem>
-                <DropdownMenuItem disabled>
-                  <User class="mr-2 h-4 w-4" />
-                  <span>View contact details</span>
+                <DropdownMenuItem @click="isInfoPanelOpen = !isInfoPanelOpen">
+                  <Info class="mr-2 h-4 w-4" />
+                  <span>{{ isInfoPanelOpen ? 'Hide contact details' : 'View contact details' }}</span>
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -1737,6 +1748,13 @@ async function sendMediaMessage() {
         </div>
       </template>
     </div>
+
+    <!-- Contact Info Panel -->
+    <ContactInfoPanel
+      v-if="contactsStore.currentContact && isInfoPanelOpen"
+      :contact="contactsStore.currentContact"
+      @close="isInfoPanelOpen = false"
+    />
 
     <!-- Assign Contact Dialog -->
     <Dialog v-model:open="isAssignDialogOpen" @update:open="(open) => !open && (assignSearchQuery = '')">

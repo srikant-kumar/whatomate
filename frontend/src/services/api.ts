@@ -125,6 +125,7 @@ export const contactsService = {
   delete: (id: string) => api.delete(`/contacts/${id}`),
   assign: (id: string, userId: string | null) =>
     api.put(`/contacts/${id}/assign`, { user_id: userId }),
+  getSessionData: (id: string) => api.get(`/contacts/${id}/session-data`),
   import: (file: File) => {
     const formData = new FormData()
     formData.append('file', file)

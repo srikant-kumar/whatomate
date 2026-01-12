@@ -104,6 +104,26 @@ interface WebhookConfig {
   body: string
 }
 
+interface PanelFieldConfig {
+  key: string
+  label: string
+  order: number
+}
+
+interface PanelSection {
+  id: string
+  label: string
+  columns: number
+  collapsible: boolean
+  default_collapsed: boolean
+  order: number
+  fields: PanelFieldConfig[]
+}
+
+interface PanelConfig {
+  sections: PanelSection[]
+}
+
 interface WhatsAppFlow {
   id: string
   name: string
@@ -191,6 +211,7 @@ const messagesOpen = ref(true)
 const inputOpen = ref(true)
 const validationOpen = ref(true)
 const advancedOpen = ref(false)
+const panelConfigOpen = ref(false)
 
 const defaultApiConfig: ApiConfig = {
   url: '',
@@ -241,6 +262,7 @@ const formData = ref({
   completion_message: 'Thank you! We have all the information we need.',
   on_complete_action: 'none',
   completion_config: { ...defaultWebhookConfig },
+  panel_config: { sections: [] } as PanelConfig,
   enabled: true,
   steps: [] as FlowStep[]
 })
@@ -255,6 +277,53 @@ const selectedStep = computed(() => {
 // All steps with valid names for branching dropdowns
 const stepsWithNames = computed(() => {
   return formData.value.steps.filter(s => s.step_name && s.step_name.trim() !== '')
+})
+
+// Extract available variables for panel configuration
+const availableVariables = computed(() => {
+  const variables: { key: string; source: string; stepName: string }[] = []
+
+  for (const step of formData.value.steps) {
+    // Add store_as variables
+    if (step.store_as && step.store_as.trim()) {
+      variables.push({
+        key: step.store_as.trim(),
+        source: 'StoreAs',
+        stepName: step.step_name || 'Unknown'
+      })
+    }
+
+    // Add response_mapping variables from api_fetch steps
+    if (step.message_type === 'api_fetch' && step.api_config?.response_mapping) {
+      for (const key of Object.keys(step.api_config.response_mapping)) {
+        if (key && key.trim()) {
+          variables.push({
+            key: key.trim(),
+            source: 'Response Mapping',
+            stepName: step.step_name || 'Unknown'
+          })
+        }
+      }
+    }
+  }
+
+  return variables
+})
+
+// Variables already assigned to panel sections
+const assignedVariables = computed(() => {
+  const assigned = new Set<string>()
+  for (const section of formData.value.panel_config.sections) {
+    for (const field of section.fields) {
+      assigned.add(field.key)
+    }
+  }
+  return assigned
+})
+
+// Variables not yet assigned to any section
+const unassignedVariables = computed(() => {
+  return availableVariables.value.filter(v => !assignedVariables.value.has(v.key))
 })
 
 const messageTypes = [
@@ -356,6 +425,9 @@ async function loadFlow(id: string) {
         ...defaultWebhookConfig,
         ...(flow.completion_config || flow.CompletionConfig || {}),
         headers: (flow.completion_config || flow.CompletionConfig || {}).headers || {}
+      },
+      panel_config: {
+        sections: (flow.panel_config || flow.PanelConfig || {}).sections || []
       },
       enabled: flow.is_enabled ?? flow.IsEnabled ?? flow.enabled ?? true,
       steps: (flow.steps || flow.Steps || []).map((s: any, idx: number) => ({
@@ -607,6 +679,49 @@ function removeCompletionHeader(key: string) {
   delete formData.value.completion_config.headers[key]
 }
 
+// Panel config helpers
+function addPanelSection() {
+  const newId = `section_${Date.now()}`
+  formData.value.panel_config.sections.push({
+    id: newId,
+    label: 'New Section',
+    columns: 1,
+    collapsible: true,
+    default_collapsed: false,
+    order: formData.value.panel_config.sections.length + 1,
+    fields: []
+  })
+}
+
+function removePanelSection(index: number) {
+  formData.value.panel_config.sections.splice(index, 1)
+  // Update order
+  formData.value.panel_config.sections.forEach((s, i) => s.order = i + 1)
+}
+
+function addFieldToSection(sectionIndex: number, variableKey: string) {
+  const variable = availableVariables.value.find(v => v.key === variableKey)
+  if (!variable) return
+
+  const section = formData.value.panel_config.sections[sectionIndex]
+  if (!section) return
+
+  section.fields.push({
+    key: variableKey,
+    label: variableKey.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+    order: section.fields.length + 1
+  })
+}
+
+function removeFieldFromSection(sectionIndex: number, fieldIndex: number) {
+  const section = formData.value.panel_config.sections[sectionIndex]
+  if (!section) return
+
+  section.fields.splice(fieldIndex, 1)
+  // Update order
+  section.fields.forEach((f, i) => f.order = i + 1)
+}
+
 async function saveFlow() {
   if (!formData.value.name.trim()) {
     toast.error('Please enter a flow name')
@@ -658,6 +773,7 @@ async function saveFlow() {
       completion_message: formData.value.completion_message,
       on_complete_action: formData.value.on_complete_action,
       completion_config: formData.value.on_complete_action === 'webhook' ? formData.value.completion_config : {},
+      panel_config: formData.value.panel_config,
       enabled: formData.value.enabled,
       steps: formData.value.steps.map((step, idx) => ({
         ...step,
@@ -1021,6 +1137,143 @@ function confirmCancel() {
                     </div>
                   </div>
                 </template>
+              </CollapsibleContent>
+            </Collapsible>
+
+            <Separator />
+
+            <!-- Panel Display Settings -->
+            <Collapsible v-model:open="panelConfigOpen">
+              <CollapsibleTrigger class="flex items-center justify-between w-full py-1 text-sm font-medium">
+                Panel Display Settings
+                <component :is="panelConfigOpen ? ChevronDown : ChevronRight" class="h-4 w-4" />
+              </CollapsibleTrigger>
+              <CollapsibleContent class="pt-3 space-y-3">
+                <p class="text-[10px] text-muted-foreground">
+                  Configure which fields to show in the contact info panel when viewing chat.
+                </p>
+
+                <!-- Available Variables -->
+                <div v-if="availableVariables.length > 0" class="space-y-2">
+                  <Label class="text-xs">Available Variables</Label>
+                  <div class="flex flex-wrap gap-1">
+                    <Badge
+                      v-for="variable in unassignedVariables"
+                      :key="variable.key"
+                      variant="outline"
+                      class="text-[10px] cursor-pointer hover:bg-primary/10"
+                      :title="`From ${variable.source} in ${variable.stepName}`"
+                    >
+                      {{ variable.key }}
+                    </Badge>
+                    <span v-if="unassignedVariables.length === 0" class="text-[10px] text-muted-foreground">
+                      All variables assigned
+                    </span>
+                  </div>
+                </div>
+
+                <div v-else class="text-[10px] text-muted-foreground p-2 border rounded bg-muted/30">
+                  No variables available. Add "Store Response As" to steps or configure Response Mapping in API steps.
+                </div>
+
+                <!-- Sections -->
+                <div class="space-y-2">
+                  <div class="flex items-center justify-between">
+                    <Label class="text-xs">Sections</Label>
+                    <Button variant="outline" size="sm" class="h-6 text-xs" @click="addPanelSection">
+                      <Plus class="h-3 w-3 mr-1" />
+                      Add Section
+                    </Button>
+                  </div>
+
+                  <div v-if="formData.panel_config.sections.length === 0" class="text-[10px] text-muted-foreground p-2 border rounded bg-muted/30 text-center">
+                    No sections configured. Click "Add Section" to start.
+                  </div>
+
+                  <div v-for="(section, sectionIdx) in formData.panel_config.sections" :key="section.id" class="border rounded-md p-2 space-y-2 bg-muted/20">
+                    <div class="flex items-center gap-2">
+                      <Input
+                        v-model="section.label"
+                        placeholder="Section Label"
+                        class="h-7 text-xs flex-1"
+                      />
+                      <Button variant="ghost" size="icon" class="h-7 w-7" @click="removePanelSection(sectionIdx)">
+                        <Trash2 class="h-3 w-3 text-destructive" />
+                      </Button>
+                    </div>
+
+                    <div class="flex items-center gap-3 text-[10px]">
+                      <div class="flex items-center gap-1">
+                        <span class="text-muted-foreground">Columns:</span>
+                        <Select v-model="section.columns">
+                          <SelectTrigger class="h-6 w-14 text-[10px]">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem :value="1">1</SelectItem>
+                            <SelectItem :value="2">2</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div class="flex items-center gap-1">
+                        <Switch
+                          :checked="section.collapsible"
+                          @update:checked="section.collapsible = $event"
+                          class="scale-75"
+                        />
+                        <span class="text-muted-foreground">Collapsible</span>
+                      </div>
+                      <div v-if="section.collapsible" class="flex items-center gap-1">
+                        <Switch
+                          :checked="section.default_collapsed"
+                          @update:checked="section.default_collapsed = $event"
+                          class="scale-75"
+                        />
+                        <span class="text-muted-foreground">Collapsed</span>
+                      </div>
+                    </div>
+
+                    <!-- Fields in section -->
+                    <div class="space-y-1">
+                      <div class="flex items-center justify-between">
+                        <span class="text-[10px] text-muted-foreground">Fields:</span>
+                        <Select @update:model-value="addFieldToSection(sectionIdx, $event)">
+                          <SelectTrigger class="h-6 w-24 text-[10px]">
+                            <SelectValue placeholder="+ Add" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem
+                              v-for="variable in unassignedVariables"
+                              :key="variable.key"
+                              :value="variable.key"
+                            >
+                              {{ variable.key }}
+                            </SelectItem>
+                            <div v-if="unassignedVariables.length === 0" class="p-2 text-[10px] text-muted-foreground">
+                              No variables available
+                            </div>
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div v-if="section.fields.length === 0" class="text-[10px] text-muted-foreground text-center py-1">
+                        No fields added
+                      </div>
+
+                      <div v-for="(field, fieldIdx) in section.fields" :key="field.key" class="flex items-center gap-1 bg-background rounded p-1">
+                        <Badge variant="secondary" class="text-[10px] font-mono">{{ field.key }}</Badge>
+                        <Input
+                          v-model="field.label"
+                          placeholder="Display Label"
+                          class="h-6 text-[10px] flex-1"
+                        />
+                        <Button variant="ghost" size="icon" class="h-6 w-6" @click="removeFieldFromSection(sectionIdx, fieldIdx)">
+                          <Trash2 class="h-3 w-3 text-destructive" />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </CollapsibleContent>
             </Collapsible>
           </div>
