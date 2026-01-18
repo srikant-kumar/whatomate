@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import DOMPurify from 'dompurify'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -41,6 +41,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { api, templatesService } from '@/services/api'
+import { useOrganizationsStore } from '@/stores/organizations'
 import { toast } from 'vue-sonner'
 import {
   Plus,
@@ -86,6 +87,8 @@ interface Template {
   created_at: string
   updated_at: string
 }
+
+const organizationsStore = useOrganizationsStore()
 
 const templates = ref<Template[]>([])
 const accounts = ref<WhatsAppAccount[]>([])
@@ -150,6 +153,12 @@ const headerTypes = [
   { value: 'VIDEO', label: 'Video' },
   { value: 'DOCUMENT', label: 'Document' },
 ]
+
+// Refetch data when organization changes
+watch(() => organizationsStore.selectedOrgId, async () => {
+  await fetchAccounts()
+  await fetchTemplates()
+})
 
 onMounted(async () => {
   await fetchAccounts()
@@ -273,7 +282,6 @@ async function saveTemplate() {
 
   isSubmitting.value = true
   try {
-    console.log('Saving template with data:', JSON.stringify(formData.value, null, 2))
     if (editingTemplate.value) {
       await api.put(`/templates/${editingTemplate.value.id}`, formData.value)
       toast.success('Template updated successfully')
