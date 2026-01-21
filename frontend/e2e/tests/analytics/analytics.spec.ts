@@ -35,9 +35,9 @@ test.describe('Agent Analytics', () => {
     // Wait for loading to complete (skeleton should disappear)
     await page.waitForSelector('.card-depth', { timeout: 15000 })
 
-    // Check stat card labels are visible
-    await expect(page.getByText('Transfers Handled')).toBeVisible()
-    await expect(page.getByText('Active Conversations')).toBeVisible()
+    // Check stat card labels are visible (use exact match to avoid matching chart descriptions)
+    await expect(page.getByText('Transfers Handled', { exact: true })).toBeVisible()
+    await expect(page.getByText('Active Conversations', { exact: true })).toBeVisible()
   })
 })
 
