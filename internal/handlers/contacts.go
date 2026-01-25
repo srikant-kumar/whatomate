@@ -1155,3 +1155,206 @@ func (a *App) GetContactSessionData(r *fastglue.Request) error {
 
 	return r.SendEnvelope(response)
 }
+
+// CreateContactRequest represents the request body for creating a contact
+type CreateContactRequest struct {
+	PhoneNumber string      `json:"phone_number"`
+	Name        string      `json:"name,omitempty"`
+	AccountID   *uuid.UUID  `json:"account_id,omitempty"`
+	Metadata    models.JSONB `json:"metadata,omitempty"`
+}
+
+// UpdateContactRequest represents the request body for updating a contact
+type UpdateContactRequest struct {
+	Name     string       `json:"name,omitempty"`
+	Metadata models.JSONB `json:"metadata,omitempty"`
+}
+
+// CreateContact creates a new contact
+// POST /api/contacts
+func (a *App) CreateContact(r *fastglue.Request) error {
+	orgID, err := getOrganizationID(r)
+	if err != nil {
+		return r.SendErrorEnvelope(fasthttp.StatusUnauthorized, "Unauthorized", nil, "")
+	}
+
+	userID, _ := r.RequestCtx.UserValue("user_id").(uuid.UUID)
+
+	// Check permission - need contacts:write to create contacts
+	if !a.HasPermission(userID, models.ResourceContacts, models.ActionWrite) {
+		return r.SendErrorEnvelope(fasthttp.StatusForbidden, "Insufficient permissions", nil, "")
+	}
+
+	var req CreateContactRequest
+	if err := r.Decode(&req, "json"); err != nil {
+		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Invalid request body", nil, "")
+	}
+
+	// Validate required fields
+	if req.PhoneNumber == "" {
+		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "phone_number is required", nil, "")
+	}
+
+	// Normalize phone number
+	phoneNumber := normalizePhoneNumber(req.PhoneNumber)
+
+	// Check if contact with this phone number already exists in the org
+	var existingContact models.Contact
+	if err := a.ScopeToOrg(a.DB, userID, orgID).Where("phone_number = ?", phoneNumber).First(&existingContact).Error; err == nil {
+		return r.SendErrorEnvelope(fasthttp.StatusConflict, "Contact with this phone number already exists", nil, "")
+	}
+
+	// Validate WhatsApp account if provided
+	if req.AccountID != nil {
+		var account models.WhatsAppAccount
+		if err := a.ScopeToOrg(a.DB, userID, orgID).Where("id = ?", req.AccountID).First(&account).Error; err != nil {
+			return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "WhatsApp account not found", nil, "")
+		}
+	}
+
+	// Create contact
+	contact := models.Contact{
+		OrganizationID: orgID,
+		PhoneNumber:    phoneNumber,
+		ProfileName:    req.Name,
+		Metadata:       req.Metadata,
+	}
+
+	// Set WhatsAppAccount from AccountID for backward compatibility
+	if req.AccountID != nil {
+		var account models.WhatsAppAccount
+		if err := a.DB.Where("id = ?", req.AccountID).First(&account).Error; err == nil {
+			contact.WhatsAppAccount = account.Name
+		}
+	}
+
+	if err := a.DB.Create(&contact).Error; err != nil {
+		a.Log.Error("Failed to create contact", "error", err)
+		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to create contact", nil, "")
+	}
+
+	// Build response matching documented format
+	response := map[string]any{
+		"id":           contact.ID,
+		"phone_number": contact.PhoneNumber,
+		"name":         contact.ProfileName,
+		"account_id":   req.AccountID,
+		"created_at":   contact.CreatedAt.Format("2006-01-02T15:04:05Z"),
+	}
+
+	return r.SendEnvelope(response)
+}
+
+// UpdateContact updates an existing contact
+// PUT /api/contacts/{id}
+func (a *App) UpdateContact(r *fastglue.Request) error {
+	orgID, err := getOrganizationID(r)
+	if err != nil {
+		return r.SendErrorEnvelope(fasthttp.StatusUnauthorized, "Unauthorized", nil, "")
+	}
+
+	userID, _ := r.RequestCtx.UserValue("user_id").(uuid.UUID)
+
+	contactIDStr := r.RequestCtx.UserValue("id").(string)
+	contactID, err := uuid.Parse(contactIDStr)
+	if err != nil {
+		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Invalid contact ID", nil, "")
+	}
+
+	// Check permission - need contacts:write to update contacts
+	if !a.HasPermission(userID, models.ResourceContacts, models.ActionWrite) {
+		return r.SendErrorEnvelope(fasthttp.StatusForbidden, "Insufficient permissions", nil, "")
+	}
+
+	// Get existing contact
+	var contact models.Contact
+	if err := a.ScopeToOrg(a.DB, userID, orgID).Where("id = ?", contactID).First(&contact).Error; err != nil {
+		return r.SendErrorEnvelope(fasthttp.StatusNotFound, "Contact not found", nil, "")
+	}
+
+	var req UpdateContactRequest
+	if err := r.Decode(&req, "json"); err != nil {
+		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Invalid request body", nil, "")
+	}
+
+	// Build update map
+	updates := make(map[string]interface{})
+
+	if req.Name != "" {
+		updates["profile_name"] = req.Name
+	}
+
+	// Handle metadata update
+	if req.Metadata != nil {
+		updates["metadata"] = req.Metadata
+	}
+
+	// Apply updates
+	if len(updates) > 0 {
+		if err := a.DB.Model(&contact).Updates(updates).Error; err != nil {
+			a.Log.Error("Failed to update contact", "error", err)
+			return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to update contact", nil, "")
+		}
+	}
+
+	// Reload contact
+	a.DB.First(&contact, contactID)
+
+	// Build response matching documented format
+	response := map[string]any{
+		"id":           contact.ID,
+		"phone_number": contact.PhoneNumber,
+		"name":         contact.ProfileName,
+		"metadata":     contact.Metadata,
+		"updated_at":   contact.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+	}
+
+	return r.SendEnvelope(response)
+}
+
+// DeleteContact deletes a contact (soft delete)
+// DELETE /api/contacts/{id}
+func (a *App) DeleteContact(r *fastglue.Request) error {
+	orgID, err := getOrganizationID(r)
+	if err != nil {
+		return r.SendErrorEnvelope(fasthttp.StatusUnauthorized, "Unauthorized", nil, "")
+	}
+
+	userID, _ := r.RequestCtx.UserValue("user_id").(uuid.UUID)
+
+	contactIDStr := r.RequestCtx.UserValue("id").(string)
+	contactID, err := uuid.Parse(contactIDStr)
+	if err != nil {
+		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Invalid contact ID", nil, "")
+	}
+
+	// Check permission - need contacts:delete to delete contacts
+	if !a.HasPermission(userID, models.ResourceContacts, models.ActionDelete) {
+		return r.SendErrorEnvelope(fasthttp.StatusForbidden, "Insufficient permissions", nil, "")
+	}
+
+	// Get contact to verify it exists and belongs to org
+	var contact models.Contact
+	if err := a.ScopeToOrg(a.DB, userID, orgID).Where("id = ?", contactID).First(&contact).Error; err != nil {
+		return r.SendErrorEnvelope(fasthttp.StatusNotFound, "Contact not found", nil, "")
+	}
+
+	// Soft delete the contact (GORM with DeletedAt)
+	if err := a.DB.Delete(&contact).Error; err != nil {
+		a.Log.Error("Failed to delete contact", "error", err)
+		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to delete contact", nil, "")
+	}
+
+	return r.SendEnvelope(nil)
+}
+
+// normalizePhoneNumber normalizes a phone number by removing common formatting
+func normalizePhoneNumber(phone string) string {
+	result := ""
+	for _, ch := range phone {
+		if (ch >= '0' && ch <= '9') || ch == '+' {
+			result += string(ch)
+		}
+	}
+	return result
+}

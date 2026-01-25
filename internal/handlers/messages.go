@@ -717,3 +717,81 @@ func ResolveParams(paramNames []string, params map[string]string) []string {
 	}
 	return result
 }
+
+// MarkMessageRead marks a specific message as read
+// PUT /api/messages/{id}/read
+func (a *App) MarkMessageRead(r *fastglue.Request) error {
+	orgID, err := getOrganizationID(r)
+	if err != nil {
+		return r.SendErrorEnvelope(fasthttp.StatusUnauthorized, "Unauthorized", nil, "")
+	}
+
+	userID, _ := r.RequestCtx.UserValue("user_id").(uuid.UUID)
+
+	messageIDStr := r.RequestCtx.UserValue("id").(string)
+	messageID, err := uuid.Parse(messageIDStr)
+	if err != nil {
+		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Invalid message ID", nil, "")
+	}
+
+	// Get the message
+	var message models.Message
+	query := a.ScopeToOrg(a.DB, userID, orgID).Where("id = ?", messageID)
+	if err := query.First(&message).Error; err != nil {
+		return r.SendErrorEnvelope(fasthttp.StatusNotFound, "Message not found", nil, "")
+	}
+
+	// Verify access - if no contacts:read permission, check if assigned to user
+	if !a.HasPermission(userID, models.ResourceContacts, models.ActionRead) {
+		var contact models.Contact
+		if err := a.DB.Where("id = ?", message.ContactID).First(&contact).Error; err != nil {
+			return r.SendErrorEnvelope(fasthttp.StatusNotFound, "Contact not found", nil, "")
+		}
+		if contact.AssignedUserID == nil || *contact.AssignedUserID != userID {
+			return r.SendErrorEnvelope(fasthttp.StatusForbidden, "Insufficient permissions", nil, "")
+		}
+	}
+
+	// Only incoming messages can be marked as read
+	if message.Direction != models.DirectionIncoming {
+		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Only incoming messages can be marked as read", nil, "")
+	}
+
+	// Check if already read
+	if message.Status == models.MessageStatusRead {
+		return r.SendEnvelope(nil)
+	}
+
+	// Mark message as read in database
+	if err := a.DB.Model(&message).Update("status", models.MessageStatusRead).Error; err != nil {
+		a.Log.Error("Failed to mark message as read", "error", err, "message_id", messageID)
+		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to mark message as read", nil, "")
+	}
+
+	// Send read receipt to WhatsApp if the message has a WhatsApp message ID
+	if message.WhatsAppMessageID != "" {
+		var account models.WhatsAppAccount
+		if err := a.ScopeToOrg(a.DB, userID, orgID).Where("name = ?", message.WhatsAppAccount).First(&account).Error; err == nil {
+			// Only send read receipt if auto_read_receipt is enabled on the account
+			if account.AutoReadReceipt {
+				a.wg.Add(1)
+				go func() {
+					defer a.wg.Done()
+					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+
+					waAccount := &whatsapp.Account{
+						PhoneID:     account.PhoneID,
+						AccessToken: account.AccessToken,
+						APIVersion:  account.APIVersion,
+					}
+					if err := a.WhatsApp.MarkMessageRead(ctx, waAccount, message.WhatsAppMessageID); err != nil {
+						a.Log.Error("Failed to send read receipt", "error", err, "message_id", message.WhatsAppMessageID)
+					}
+				}()
+			}
+		}
+	}
+
+	return r.SendEnvelope(nil)
+}
