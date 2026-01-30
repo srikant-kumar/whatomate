@@ -1158,7 +1158,7 @@ type UpdateContactRequest struct {
 // CreateContact creates a new contact
 // POST /api/contacts
 func (a *App) CreateContact(r *fastglue.Request) error {
-	orgID, err := getOrganizationID(r)
+	orgID, err := a.getOrgID(r)
 	if err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusUnauthorized, "Unauthorized", nil, "")
 	}
@@ -1233,7 +1233,7 @@ func (a *App) CreateContact(r *fastglue.Request) error {
 // UpdateContact updates an existing contact
 // PUT /api/contacts/{id}
 func (a *App) UpdateContact(r *fastglue.Request) error {
-	orgID, err := getOrganizationID(r)
+	orgID, err := a.getOrgID(r)
 	if err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusUnauthorized, "Unauthorized", nil, "")
 	}
@@ -1300,7 +1300,7 @@ func (a *App) UpdateContact(r *fastglue.Request) error {
 // DeleteContact deletes a contact (soft delete)
 // DELETE /api/contacts/{id}
 func (a *App) DeleteContact(r *fastglue.Request) error {
-	orgID, err := getOrganizationID(r)
+	orgID, err := a.getOrgID(r)
 	if err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusUnauthorized, "Unauthorized", nil, "")
 	}

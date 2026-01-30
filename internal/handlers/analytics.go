@@ -190,7 +190,7 @@ type TimelineEntry struct {
 // GetMessageAnalytics returns message analytics for the organization
 // GET /api/analytics/messages
 func (a *App) GetMessageAnalytics(r *fastglue.Request) error {
-	orgID, err := getOrganizationID(r)
+	orgID, err := a.getOrgID(r)
 	if err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusUnauthorized, "Unauthorized", nil, "")
 	}
@@ -339,7 +339,7 @@ func (a *App) GetMessageAnalytics(r *fastglue.Request) error {
 // GetChatbotAnalytics returns chatbot analytics for the organization
 // GET /api/analytics/chatbot
 func (a *App) GetChatbotAnalytics(r *fastglue.Request) error {
-	orgID, err := getOrganizationID(r)
+	orgID, err := a.getOrgID(r)
 	if err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusUnauthorized, "Unauthorized", nil, "")
 	}

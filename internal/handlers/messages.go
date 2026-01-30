@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -725,7 +726,7 @@ func ResolveParams(paramNames []string, params map[string]string) []string {
 // MarkMessageRead marks a specific message as read
 // PUT /api/messages/{id}/read
 func (a *App) MarkMessageRead(r *fastglue.Request) error {
-	orgID, err := getOrganizationID(r)
+	orgID, err := a.getOrgID(r)
 	if err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusUnauthorized, "Unauthorized", nil, "")
 	}
