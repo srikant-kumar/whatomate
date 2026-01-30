@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted, nextTick, computed } from 'vue'
+import { ref, watch, onMounted, onUnmounted, nextTick, computed, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useContactsStore, type Contact, type Message } from '@/stores/contacts'
 import { useAuthStore } from '@/stores/auth'
@@ -24,8 +24,14 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover'
-import EmojiPicker from 'vue3-emoji-picker'
-import 'vue3-emoji-picker/css'
+// Lazy-load emoji picker to reduce initial bundle size
+const EmojiPicker = defineAsyncComponent(() => {
+  return import('vue3-emoji-picker').then(module => {
+    // Import CSS when component loads
+    import('vue3-emoji-picker/css')
+    return module.default
+  })
+})
 import {
   DropdownMenu,
   DropdownMenuContent,

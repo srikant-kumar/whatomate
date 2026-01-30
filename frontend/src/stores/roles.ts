@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { rolesService, permissionsService, type Role, type Permission } from '@/services/api'
+import { RESOURCE_LABELS } from '@/lib/constants'
 
 export interface CreateRoleData {
   name: string
@@ -23,22 +24,6 @@ export interface PermissionGroup {
   permissions: Permission[]
 }
 
-// Resource labels for display
-const resourceLabels: Record<string, string> = {
-  users: 'Users',
-  contacts: 'Contacts',
-  messages: 'Messages',
-  teams: 'Teams',
-  chatbot: 'Chatbot',
-  campaigns: 'Campaigns',
-  templates: 'Templates',
-  analytics: 'Analytics',
-  settings: 'Settings',
-  webhooks: 'Webhooks',
-  apikeys: 'API Keys',
-  roles: 'Roles'
-}
-
 export const useRolesStore = defineStore('roles', () => {
   const roles = ref<Role[]>([])
   const permissions = ref<Permission[]>([])
@@ -59,7 +44,7 @@ export const useRolesStore = defineStore('roles', () => {
     return Object.entries(groups)
       .map(([resource, perms]) => ({
         resource,
-        label: resourceLabels[resource] || resource.charAt(0).toUpperCase() + resource.slice(1),
+        label: RESOURCE_LABELS[resource] || resource.charAt(0).toUpperCase() + resource.slice(1),
         permissions: perms.sort((a, b) => a.action.localeCompare(b.action))
       }))
       .sort((a, b) => a.label.localeCompare(b.label))

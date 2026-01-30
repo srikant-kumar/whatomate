@@ -4,7 +4,8 @@
 
 Modern, open-source WhatsApp Business Platform. Single binary app.
 
-![Dashboard](docs/public/images/01-dashboard.png)
+![Dashboard](docs/public/images/dashboard-light.png#gh-light-mode-only)
+![Dashboard](docs/public/images/dashboard-dark.png#gh-dark-mode-only)
 
 ## Features
 
@@ -38,8 +39,14 @@ Modern, open-source WhatsApp Business Platform. Single binary app.
 <details>
 <summary>View more screenshots</summary>
 
-![Chatbot Settings](docs/public/images/02-chatbot-settings.png)
-![Conversation Flow Builder](docs/public/images/08-conversation-flow-builder.png)
+![Dashboard](docs/public/images/dashboard-light.png#gh-light-mode-only)
+![Dashboard](docs/public/images/dashboard-dark.png#gh-dark-mode-only)
+![Chatbot](docs/public/images/chatbot-light.png#gh-light-mode-only)
+![Chatbot](docs/public/images/chatbot-dark.png#gh-dark-mode-only)
+![Agent Analytics](docs/public/images/agent-analytics-light.png#gh-light-mode-only)
+![Agent Analytics](docs/public/images/agent-analytics-dark.png#gh-dark-mode-only)
+![Conversation Flow Builder](docs/public/images/conversation-flow-light.png#gh-light-mode-only)
+![Conversation Flow Builder](docs/public/images/conversation-flow-dark.png#gh-dark-mode-only)
 ![Templates](docs/public/images/11-templates.png)
 ![Campaigns](docs/public/images/13-campaigns.png)
 
@@ -108,6 +115,7 @@ See [configuration docs](https://shridarpatil.github.io/whatomate/getting-starte
 ## Developers
 
 The backend is written in Go ([Fastglue](https://github.com/zerodha/fastglue)) and the frontend is Vue.js 3 with shadcn-vue.
+- If you are interested in contributing, please read [CONTRIBUTING.md](./CONTRIBUTING.md) first.
 
 ```bash
 # Development setup

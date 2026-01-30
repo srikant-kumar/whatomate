@@ -105,13 +105,39 @@ func Handler(basePath string) fasthttp.RequestHandler {
 					w.Header().Set("Content-Type", "application/octet-stream")
 				}
 
-				// Read and serve file content
-				content, err := fs.ReadFile(distSubFS, filePath)
-				if err != nil {
-					http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-					return
+				// Check Accept-Encoding and serve pre-compressed if available
+				acceptEncoding := r.Header.Get("Accept-Encoding")
+				var content []byte
+				var contentEncoding string
+
+				// Try Brotli first (better compression)
+				if strings.Contains(acceptEncoding, "br") {
+					if brContent, err := fs.ReadFile(distSubFS, filePath+".br"); err == nil {
+						content = brContent
+						contentEncoding = "br"
+					}
 				}
 
+				// Fall back to gzip
+				if content == nil && strings.Contains(acceptEncoding, "gzip") {
+					if gzContent, err := fs.ReadFile(distSubFS, filePath+".gz"); err == nil {
+						content = gzContent
+						contentEncoding = "gzip"
+					}
+				}
+
+				// Fall back to uncompressed
+				if content == nil {
+					content, err = fs.ReadFile(distSubFS, filePath)
+					if err != nil {
+						http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+						return
+					}
+				}
+
+				if contentEncoding != "" {
+					w.Header().Set("Content-Encoding", contentEncoding)
+				}
 				w.Header().Set("Content-Length", fmt.Sprintf("%d", len(content)))
 				_, _ = w.Write(content)
 				return

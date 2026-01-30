@@ -323,10 +323,16 @@ export interface DashboardWidget {
   filters: Array<{ field: string; operator: string; value: string }>
   display_type: string
   chart_type: string
+  group_by_field: string
   show_change: boolean
   color: string
   size: string
   display_order: number
+  grid_x: number
+  grid_y: number
+  grid_w: number
+  grid_h: number
+  config: Record<string, any>
   is_shared: boolean
   is_default: boolean
   is_owner: boolean
@@ -342,6 +348,18 @@ export interface WidgetData {
   prev_value: number
   chart_data: Array<{ label: string; value: number }>
   data_points: Array<{ label: string; value: number; color?: string }>
+  grouped_series?: {
+    labels: string[]
+    datasets: Array<{ label: string; data: number[] }>
+  }
+  table_rows?: Array<{
+    id: string
+    label: string
+    sub_label: string
+    status: string
+    direction?: string
+    created_at: string
+  }>
 }
 
 export interface DataSourceInfo {
@@ -350,9 +368,17 @@ export interface DataSourceInfo {
   fields: string[]
 }
 
-export const dashboardWidgetsService = {
-  list: () => api.get<{ widgets: DashboardWidget[] }>('/dashboard/widgets'),
-  get: (id: string) => api.get<DashboardWidget>(`/dashboard/widgets/${id}`),
+export interface LayoutItem {
+  id: string
+  grid_x: number
+  grid_y: number
+  grid_w: number
+  grid_h: number
+}
+
+export const widgetsService = {
+  list: () => api.get<{ widgets: DashboardWidget[] }>('/widgets'),
+  get: (id: string) => api.get<DashboardWidget>(`/widgets/${id}`),
   create: (data: {
     name: string
     description?: string
@@ -362,11 +388,13 @@ export const dashboardWidgetsService = {
     filters?: Array<{ field: string; operator: string; value: string }>
     display_type?: string
     chart_type?: string
+    group_by_field?: string
     show_change?: boolean
     color?: string
     size?: string
+    config?: Record<string, any>
     is_shared?: boolean
-  }) => api.post<DashboardWidget>('/dashboard/widgets', data),
+  }) => api.post<DashboardWidget>('/widgets', data),
   update: (id: string, data: Partial<{
     name: string
     description: string
@@ -376,24 +404,26 @@ export const dashboardWidgetsService = {
     filters: Array<{ field: string; operator: string; value: string }>
     display_type: string
     chart_type: string
+    group_by_field: string
     show_change: boolean
     color: string
     size: string
+    config: Record<string, any>
     is_shared: boolean
-  }>) => api.put<DashboardWidget>(`/dashboard/widgets/${id}`, data),
-  delete: (id: string) => api.delete(`/dashboard/widgets/${id}`),
+  }>) => api.put<DashboardWidget>(`/widgets/${id}`, data),
+  delete: (id: string) => api.delete(`/widgets/${id}`),
   getData: (id: string, params?: { from?: string; to?: string }) =>
-    api.get<WidgetData>(`/dashboard/widgets/${id}/data`, { params }),
+    api.get<WidgetData>(`/widgets/${id}/data`, { params }),
   getAllData: (params?: { from?: string; to?: string }) =>
-    api.get<{ data: Record<string, WidgetData> }>('/dashboard/widgets/data', { params }),
+    api.get<{ data: Record<string, WidgetData> }>('/widgets/data', { params }),
   getDataSources: () => api.get<{
     data_sources: DataSourceInfo[]
     metrics: string[]
     display_types: string[]
     operators: Array<{ value: string; label: string }>
-  }>('/dashboard/widgets/data-sources'),
-  reorder: (widgetIds: string[]) =>
-    api.post('/dashboard/widgets/reorder', { widget_ids: widgetIds })
+  }>('/widgets/data-sources'),
+  saveLayout: (layout: LayoutItem[]) =>
+    api.post('/widgets/layout', { layout })
 }
 
 export const organizationService = {

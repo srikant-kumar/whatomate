@@ -8,58 +8,16 @@ import { Label } from '@/components/ui/label'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Textarea } from '@/components/ui/textarea'
 import { Separator } from '@/components/ui/separator'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { PageHeader, SearchInput } from '@/components/shared'
 import { api, templatesService } from '@/services/api'
 import { useOrganizationsStore } from '@/stores/organizations'
 import { toast } from 'vue-sonner'
-import {
-  Plus,
-  Search,
-  RefreshCw,
-  FileText,
-  Eye,
-  Pencil,
-  Trash2,
-  Loader2,
-  MessageSquare,
-  Image,
-  FileIcon,
-  Video,
-  X,
-  Check,
-  AlertCircle,
-  Send,
-  Upload
-} from 'lucide-vue-next'
+import { Plus, RefreshCw, FileText, Eye, Pencil, Trash2, Loader2, MessageSquare, Image, FileIcon, Video, X, Check, AlertCircle, Send, Upload } from 'lucide-vue-next'
+import { getErrorMessage } from '@/lib/api-utils'
 
 interface WhatsAppAccount {
   id: string
@@ -211,9 +169,8 @@ async function syncTemplates() {
     })
     toast.success(response.data.data.message || 'Templates synced successfully')
     await fetchTemplates()
-  } catch (error: any) {
-    const message = error.response?.data?.message || 'Failed to sync templates'
-    toast.error(message)
+  } catch (error) {
+    toast.error(getErrorMessage(error, 'Failed to sync templates'))
   } finally {
     isSyncing.value = false
   }
@@ -290,9 +247,8 @@ async function saveTemplate() {
     }
     isDialogOpen.value = false
     await fetchTemplates()
-  } catch (error: any) {
-    const message = error.response?.data?.message || 'Failed to save template'
-    toast.error(message)
+  } catch (error) {
+    toast.error(getErrorMessage(error, 'Failed to save template'))
   } finally {
     isSubmitting.value = false
   }
@@ -312,9 +268,8 @@ async function confirmDeleteTemplate() {
     deleteDialogOpen.value = false
     templateToDelete.value = null
     await fetchTemplates()
-  } catch (error: any) {
-    const message = error.response?.data?.message || 'Failed to delete template'
-    toast.error(message)
+  } catch (error) {
+    toast.error(getErrorMessage(error, 'Failed to delete template'))
   }
 }
 
@@ -335,9 +290,8 @@ async function confirmPublishTemplate() {
     publishDialogOpen.value = false
     templateToPublish.value = null
     await fetchTemplates()
-  } catch (error: any) {
-    const message = error.response?.data?.message || 'Failed to publish template'
-    toast.error(message, { duration: 8000 })
+  } catch (error) {
+    toast.error(getErrorMessage(error, 'Failed to publish template'), { duration: 8000 })
   } finally {
     publishingTemplateId.value = null
   }
@@ -474,9 +428,8 @@ async function uploadHeaderMedia() {
     headerMediaHandle.value = data.handle
     formData.value.header_content = data.handle
     toast.success(`Media uploaded: ${data.filename}`)
-  } catch (error: any) {
-    const message = error.response?.data?.message || 'Failed to upload media'
-    toast.error(message)
+  } catch (error) {
+    toast.error(getErrorMessage(error, 'Failed to upload media'))
   } finally {
     headerMediaUploading.value = false
   }
@@ -539,29 +492,19 @@ function formatPreview(text: string, samples: any[]): string {
 
 <template>
   <div class="flex flex-col h-full bg-[#0a0a0b] light:bg-gray-50">
-    <!-- Header -->
-    <header class="border-b border-white/[0.08] light:border-gray-200 bg-[#0a0a0b]/95 light:bg-white/95 backdrop-blur">
-      <div class="flex h-16 items-center px-6">
-        <div class="h-8 w-8 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-600 flex items-center justify-center mr-3 shadow-lg shadow-blue-500/20">
-          <FileText class="h-4 w-4 text-white" />
-        </div>
-        <div class="flex-1">
-          <h1 class="text-xl font-semibold text-white light:text-gray-900">Message Templates</h1>
-          <p class="text-sm text-white/50 light:text-gray-500">Create and manage WhatsApp message templates</p>
-        </div>
-        <div class="flex items-center gap-2">
-          <Button variant="outline" size="sm" @click="syncTemplates" :disabled="isSyncing || !selectedAccount || selectedAccount === 'all'">
-            <Loader2 v-if="isSyncing" class="h-4 w-4 mr-2 animate-spin" />
-            <RefreshCw v-else class="h-4 w-4 mr-2" />
-            Sync from Meta
-          </Button>
-          <Button variant="outline" size="sm" @click="openCreateDialog">
-            <Plus class="h-4 w-4 mr-2" />
-            Create Template
-          </Button>
-        </div>
-      </div>
-    </header>
+    <PageHeader title="Message Templates" subtitle="Create and manage WhatsApp message templates" :icon="FileText" icon-gradient="bg-gradient-to-br from-blue-500 to-cyan-600 shadow-blue-500/20">
+      <template #actions>
+        <Button variant="outline" size="sm" @click="syncTemplates" :disabled="isSyncing || !selectedAccount || selectedAccount === 'all'">
+          <Loader2 v-if="isSyncing" class="h-4 w-4 mr-2 animate-spin" />
+          <RefreshCw v-else class="h-4 w-4 mr-2" />
+          Sync from Meta
+        </Button>
+        <Button variant="outline" size="sm" @click="openCreateDialog">
+          <Plus class="h-4 w-4 mr-2" />
+          Create Template
+        </Button>
+      </template>
+    </PageHeader>
 
     <!-- Filters -->
     <div class="p-4 border-b flex items-center gap-4 flex-wrap">
@@ -579,10 +522,7 @@ function formatPreview(text: string, samples: any[]): string {
           </SelectContent>
         </Select>
       </div>
-      <div class="relative flex-1 max-w-md">
-        <Search class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input v-model="searchQuery" placeholder="Search templates..." class="pl-9" />
-      </div>
+      <SearchInput v-model="searchQuery" placeholder="Search templates..." class="flex-1 max-w-md" />
     </div>
 
     <!-- Loading State -->
@@ -655,7 +595,7 @@ function formatPreview(text: string, samples: any[]): string {
                   <Send v-else class="h-4 w-4" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Publish to Meta</TooltipContent>
+              <TooltipContent>{{ template.meta_template_id ? 'Republish to Meta' : 'Publish to Meta' }}</TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger as-child>
@@ -705,7 +645,7 @@ function formatPreview(text: string, samples: any[]): string {
             <Label>WhatsApp Account <span class="text-destructive">*</span></Label>
             <select
               v-model="formData.whatsapp_account"
-              class="w-full h-10 rounded-md border bg-background px-3"
+              class="w-full h-10 rounded-md border bg-background px-3 disabled:cursor-not-allowed disabled:opacity-50"
               :disabled="!!editingTemplate"
             >
               <option value="">Select account...</option>
@@ -741,7 +681,11 @@ function formatPreview(text: string, samples: any[]): string {
             <!-- Language -->
             <div class="space-y-2">
               <Label>Language <span class="text-destructive">*</span></Label>
-              <select v-model="formData.language" class="w-full h-10 rounded-md border bg-background px-3">
+              <select
+                v-model="formData.language"
+                class="w-full h-10 rounded-md border bg-background px-3 disabled:cursor-not-allowed disabled:opacity-50"
+                :disabled="!!editingTemplate"
+              >
                 <option v-for="lang in languages" :key="lang.code" :value="lang.code">
                   {{ lang.name }}
                 </option>
@@ -751,7 +695,11 @@ function formatPreview(text: string, samples: any[]): string {
             <!-- Category -->
             <div class="space-y-2">
               <Label>Category <span class="text-destructive">*</span></Label>
-              <select v-model="formData.category" class="w-full h-10 rounded-md border bg-background px-3">
+              <select
+                v-model="formData.category"
+                class="w-full h-10 rounded-md border bg-background px-3 disabled:cursor-not-allowed disabled:opacity-50"
+                :disabled="!!editingTemplate"
+              >
                 <option v-for="cat in categories" :key="cat.value" :value="cat.value">
                   {{ cat.label }} - {{ cat.description }}
                 </option>
@@ -1049,7 +997,7 @@ function formatPreview(text: string, samples: any[]): string {
           >
             <Loader2 v-if="publishingTemplateId === previewTemplate?.id" class="h-4 w-4 mr-2 animate-spin" />
             <Send v-else class="h-4 w-4 mr-2" />
-            {{ previewTemplate?.status === 'REJECTED' ? 'Resubmit to Meta' : 'Publish to Meta' }}
+            {{ previewTemplate?.meta_template_id ? 'Republish to Meta' : 'Publish to Meta' }}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1075,14 +1023,19 @@ function formatPreview(text: string, samples: any[]): string {
     <AlertDialog v-model:open="publishDialogOpen">
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Publish Template</AlertDialogTitle>
+          <AlertDialogTitle>{{ templateToPublish?.meta_template_id ? 'Republish' : 'Publish' }} Template</AlertDialogTitle>
           <AlertDialogDescription>
-            Publish "{{ templateToPublish?.display_name || templateToPublish?.name }}" to Meta for approval? Once submitted, you won't be able to edit it until it's approved or rejected.
+            <template v-if="templateToPublish?.meta_template_id">
+              Republish "{{ templateToPublish?.display_name || templateToPublish?.name }}" to Meta? The updated template will go through approval again before becoming active.
+            </template>
+            <template v-else>
+              Publish "{{ templateToPublish?.display_name || templateToPublish?.name }}" to Meta for approval? Once submitted, you won't be able to edit it until it's approved or rejected.
+            </template>
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction @click="confirmPublishTemplate">Publish</AlertDialogAction>
+          <AlertDialogAction @click="confirmPublishTemplate">{{ templateToPublish?.meta_template_id ? 'Republish' : 'Publish' }}</AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

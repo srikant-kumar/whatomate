@@ -32,3 +32,12 @@ img {
   border-radius: 8px;
   border: 1px solid var(--sl-color-gray-3);
 }
+
+/* Theme-aware screenshots: show light image by default, dark in dark mode */
+:root[data-theme='light'] .dark-only,
+:root:not([data-theme='dark']) .dark-only {
+  display: none !important;
+}
+:root[data-theme='dark'] .light-only {
+  display: none !important;
+}
