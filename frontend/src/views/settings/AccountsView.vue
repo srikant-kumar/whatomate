@@ -50,7 +50,9 @@ import {
   ExternalLink,
   AlertCircle,
   CheckCircle2,
-  Settings2
+  Settings2,
+  TestTube2,
+  Store
 } from 'lucide-vue-next'
 
 interface WhatsAppAccount {
@@ -82,6 +84,8 @@ interface TestResult {
   messaging_limit_tier?: string
 }
 
+import BusinessProfileDialog from './BusinessProfileDialog.vue'
+
 const organizationsStore = useOrganizationsStore()
 
 const accounts = ref<WhatsAppAccount[]>([])
@@ -93,6 +97,15 @@ const testingAccountId = ref<string | null>(null)
 const testResults = ref<Record<string, TestResult>>({})
 const deleteDialogOpen = ref(false)
 const accountToDelete = ref<WhatsAppAccount | null>(null)
+
+// Business Profile Dialog State
+const isProfileDialogOpen = ref(false)
+const profileAccount = ref<WhatsAppAccount | null>(null)
+
+function openProfileDialog(account: WhatsAppAccount) {
+  profileAccount.value = account
+  isProfileDialogOpen.value = true
+}
 
 const formData = ref({
   name: '',
@@ -308,7 +321,7 @@ const webhookUrl = window.location.origin + basePath + '/api/webhook'
             </div>
           </div>
         </div>
-        </div>
+      </div>
       </div>
     </ScrollArea>
 
@@ -339,7 +352,7 @@ const webhookUrl = window.location.origin + basePath + '/api/webhook'
         </Card>
 
         <!-- Account Cards -->
-        <div v-for="account in accounts" :key="account.id" class="card-interactive rounded-xl border border-white/[0.08] bg-white/[0.02] light:bg-white light:border-gray-200">
+        <div v-for="account in accounts" :key="account.id" class="account-card card-interactive rounded-xl border border-white/[0.08] bg-white/[0.02] light:bg-white light:border-gray-200">
           <div class="p-6">
             <div class="flex items-start justify-between">
               <div class="flex items-start gap-4">
@@ -393,8 +406,8 @@ const webhookUrl = window.location.origin + basePath + '/api/webhook'
                     <div class="flex items-center gap-2">
                       <span class="text-white/50 light:text-gray-500">Access Token:</span>
                       <Badge
-                        variant="outline"
-                        :class="account.has_access_token ? 'border-green-600 text-green-600' : 'border-destructive text-destructive'"
+                          variant="outline"
+                          :class="account.has_access_token ? 'border-green-600 text-green-600' : 'border-destructive text-destructive'"
                       >
                         {{ account.has_access_token ? 'Configured' : 'Missing' }}
                       </Badge>
@@ -402,8 +415,8 @@ const webhookUrl = window.location.origin + basePath + '/api/webhook'
                     <div class="flex items-center gap-2">
                       <span class="text-white/50 light:text-gray-500">App Secret:</span>
                       <Badge
-                        variant="outline"
-                        :class="account.has_app_secret ? 'border-green-600 text-green-600' : 'border-yellow-600 text-yellow-600'"
+                          variant="outline"
+                          :class="account.has_app_secret ? 'border-green-600 text-green-600' : 'border-yellow-600 text-yellow-600'"
                       >
                         {{ account.has_app_secret ? 'Configured' : 'Not Set' }}
                       </Badge>
@@ -442,10 +455,10 @@ const webhookUrl = window.location.origin + basePath + '/api/webhook'
               <!-- Actions -->
               <div class="flex items-center gap-1">
                 <Button
-                  variant="ghost"
-                  size="sm"
-                  @click="testConnection(account)"
-                  :disabled="testingAccountId === account.id"
+                    variant="ghost"
+                    size="sm"
+                    @click="testConnection(account)"
+                    :disabled="testingAccountId === account.id"
                 >
                   <Loader2 v-if="testingAccountId === account.id" class="h-4 w-4 animate-spin" />
                   <RefreshCw v-else class="h-4 w-4" />
@@ -458,6 +471,14 @@ const webhookUrl = window.location.origin + basePath + '/api/webhook'
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>Edit account</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger as-child>
+                    <Button variant="ghost" size="icon" @click="openProfileDialog(account)">
+                      <Store class="h-4 w-4 text-emerald-500" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Business Profile</TooltipContent>
                 </Tooltip>
                 <Tooltip>
                   <TooltipTrigger as-child>
@@ -497,22 +518,22 @@ const webhookUrl = window.location.origin + basePath + '/api/webhook'
             <ol class="list-decimal list-inside space-y-3 text-sm text-muted-foreground">
               <li>
                 Go to <a href="https://developers.facebook.com" target="_blank" class="text-primary hover:underline inline-flex items-center gap-1">
-                  Meta Developer Console <ExternalLink class="h-3 w-3" />
-                </a> and create or select your app
+                Meta Developer Console <ExternalLink class="h-3 w-3" />
+              </a> and create or select your app
               </li>
               <li>Add WhatsApp product to your app and complete the setup</li>
               <li>In WhatsApp &gt; API Setup, copy your <strong>Phone Number ID</strong> and <strong>WhatsApp Business Account ID</strong></li>
               <li>
                 Create a permanent access token in <a href="https://business.facebook.com/settings/system-users" target="_blank" class="text-primary hover:underline inline-flex items-center gap-1">
-                  Business Settings &gt; System Users <ExternalLink class="h-3 w-3" />
-                </a>
+                Business Settings &gt; System Users <ExternalLink class="h-3 w-3" />
+              </a>
               </li>
               <li>Configure the webhook URL and verify token in your Meta app settings</li>
               <li>Subscribe to messages webhook field</li>
             </ol>
           </CardContent>
         </Card>
-        </div>
+      </div>
       </div>
     </ScrollArea>
 
@@ -530,9 +551,9 @@ const webhookUrl = window.location.origin + basePath + '/api/webhook'
           <div class="space-y-2">
             <Label for="name">Account Name <span class="text-destructive">*</span></Label>
             <Input
-              id="name"
-              v-model="formData.name"
-              placeholder="e.g., Main Business Line"
+                id="name"
+                v-model="formData.name"
+                placeholder="e.g., Main Business Line"
             />
           </div>
 
@@ -541,9 +562,9 @@ const webhookUrl = window.location.origin + basePath + '/api/webhook'
           <div class="space-y-2">
             <Label for="app_id">Meta App ID</Label>
             <Input
-              id="app_id"
-              v-model="formData.app_id"
-              placeholder="e.g., 123456789012345"
+                id="app_id"
+                v-model="formData.app_id"
+                placeholder="e.g., 123456789012345"
             />
             <p class="text-xs text-muted-foreground">
               Found in Meta Developer Console &gt; App Dashboard
@@ -553,9 +574,9 @@ const webhookUrl = window.location.origin + basePath + '/api/webhook'
           <div class="space-y-2">
             <Label for="phone_id">Phone Number ID <span class="text-destructive">*</span></Label>
             <Input
-              id="phone_id"
-              v-model="formData.phone_id"
-              placeholder="e.g., 123456789012345"
+                id="phone_id"
+                v-model="formData.phone_id"
+                placeholder="e.g., 123456789012345"
             />
             <p class="text-xs text-muted-foreground">
               Found in Meta Developer Console &gt; WhatsApp &gt; API Setup
@@ -565,9 +586,9 @@ const webhookUrl = window.location.origin + basePath + '/api/webhook'
           <div class="space-y-2">
             <Label for="business_id">WhatsApp Business Account ID <span class="text-destructive">*</span></Label>
             <Input
-              id="business_id"
-              v-model="formData.business_id"
-              placeholder="e.g., 987654321098765"
+                id="business_id"
+                v-model="formData.business_id"
+                placeholder="e.g., 987654321098765"
             />
           </div>
 
@@ -578,10 +599,10 @@ const webhookUrl = window.location.origin + basePath + '/api/webhook'
               <span v-else class="text-muted-foreground">(leave blank to keep existing)</span>
             </Label>
             <Input
-              id="access_token"
-              v-model="formData.access_token"
-              type="password"
-              placeholder="Permanent access token from System User"
+                id="access_token"
+                v-model="formData.access_token"
+                type="password"
+                placeholder="Permanent access token from System User"
             />
             <p class="text-xs text-muted-foreground">
               Generate in Business Settings &gt; System Users &gt; Generate Token
@@ -594,10 +615,10 @@ const webhookUrl = window.location.origin + basePath + '/api/webhook'
               <span v-if="editingAccount" class="text-muted-foreground">(leave blank to keep existing)</span>
             </Label>
             <Input
-              id="app_secret"
-              v-model="formData.app_secret"
-              type="password"
-              placeholder="Meta App Secret for webhook verification"
+                id="app_secret"
+                v-model="formData.app_secret"
+                type="password"
+                placeholder="Meta App Secret for webhook verification"
             />
             <p class="text-xs text-muted-foreground">
               Found in Meta Developer Console &gt; App Settings &gt; Basic &gt; App Secret. Used to verify webhook signatures.
@@ -609,18 +630,18 @@ const webhookUrl = window.location.origin + basePath + '/api/webhook'
           <div class="space-y-2">
             <Label for="api_version">API Version</Label>
             <Input
-              id="api_version"
-              v-model="formData.api_version"
-              placeholder="v21.0"
+                id="api_version"
+                v-model="formData.api_version"
+                placeholder="v21.0"
             />
           </div>
 
           <div class="space-y-2">
             <Label for="webhook_verify_token">Webhook Verify Token</Label>
             <Input
-              id="webhook_verify_token"
-              v-model="formData.webhook_verify_token"
-              placeholder="Auto-generated if empty"
+                id="webhook_verify_token"
+                v-model="formData.webhook_verify_token"
+                placeholder="Auto-generated if empty"
             />
             <p class="text-xs text-muted-foreground">
               Used to verify webhook requests from Meta
@@ -636,9 +657,9 @@ const webhookUrl = window.location.origin + basePath + '/api/webhook'
                 Default for incoming messages
               </Label>
               <Switch
-                id="is_default_incoming"
-                :checked="formData.is_default_incoming"
-                @update:checked="formData.is_default_incoming = $event"
+                  id="is_default_incoming"
+                  :checked="formData.is_default_incoming"
+                  @update:checked="formData.is_default_incoming = $event"
               />
             </div>
             <div class="flex items-center justify-between">
@@ -646,9 +667,9 @@ const webhookUrl = window.location.origin + basePath + '/api/webhook'
                 Default for outgoing messages
               </Label>
               <Switch
-                id="is_default_outgoing"
-                :checked="formData.is_default_outgoing"
-                @update:checked="formData.is_default_outgoing = $event"
+                  id="is_default_outgoing"
+                  :checked="formData.is_default_outgoing"
+                  @update:checked="formData.is_default_outgoing = $event"
               />
             </div>
             <div class="flex items-center justify-between">
@@ -656,9 +677,9 @@ const webhookUrl = window.location.origin + basePath + '/api/webhook'
                 Automatically send read receipts
               </Label>
               <Switch
-                id="auto_read_receipt"
-                :checked="formData.auto_read_receipt"
-                @update:checked="formData.auto_read_receipt = $event"
+                  id="auto_read_receipt"
+                  :checked="formData.auto_read_receipt"
+                  @update:checked="formData.auto_read_receipt = $event"
               />
             </div>
           </div>
@@ -691,5 +712,11 @@ const webhookUrl = window.location.origin + basePath + '/api/webhook'
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+
+    <BusinessProfileDialog
+        v-model:open="isProfileDialogOpen"
+        :account-id="profileAccount?.id || null"
+        :account-name="profileAccount?.name || ''"
+    />
   </div>
 </template>

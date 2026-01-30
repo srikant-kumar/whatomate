@@ -481,6 +481,9 @@ func setupRoutes(g *fastglue.Fastglue, app *handlers.App, lo logf.Logger, basePa
 	g.PUT("/api/accounts/{id}", app.UpdateAccount)
 	g.DELETE("/api/accounts/{id}", app.DeleteAccount)
 	g.POST("/api/accounts/{id}/test", app.TestAccountConnection)
+	g.GET("/api/accounts/{id}/business_profile", app.GetBusinessProfile)
+	g.PUT("/api/accounts/{id}/business_profile", app.UpdateBusinessProfile)
+	g.POST("/api/accounts/{id}/business_profile/photo", app.UpdateProfilePicture)
 
 	// Contacts
 	g.GET("/api/contacts", app.ListContacts)
