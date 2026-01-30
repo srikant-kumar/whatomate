@@ -674,30 +674,6 @@ func ExtractParamNamesFromContent(content string) []string {
 	return names
 }
 
-// replaceTemplateParams replaces {{1}}, {{2}}, {{name}}, etc. placeholders with actual values
-func replaceTemplateParams(content string, params map[string]string) string {
-	if content == "" || len(params) == 0 {
-		return content
-	}
-
-	result := content
-	// Extract param names from content to replace placeholders
-	paramNames := ExtractParamNamesFromContent(content)
-	for i, name := range paramNames {
-		// Try to get value by name first (works for both named and positional)
-		if val, ok := params[name]; ok {
-			result = strings.ReplaceAll(result, fmt.Sprintf("{{%s}}", name), val)
-			continue
-		}
-		// Fall back to positional key (1-indexed)
-		key := fmt.Sprintf("%d", i+1)
-		if val, ok := params[key]; ok {
-			result = strings.ReplaceAll(result, fmt.Sprintf("{{%s}}", name), val)
-		}
-	}
-	return result
-}
-
 // ResolveParams resolves both positional and named parameters to ordered values
 func ResolveParams(paramNames []string, params map[string]string) []string {
 	if len(paramNames) == 0 || len(params) == 0 {
