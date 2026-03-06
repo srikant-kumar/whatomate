@@ -16,10 +16,14 @@ func (m *Manager) initiateTransfer(session *CallSession, waAccount string, teamT
 	// Load org-level calling overrides once
 	orgSettings := m.getOrgCallingSettings(session.OrganizationID)
 
-	// Start hold music immediately to avoid silence while DB operations run
-	player := NewAudioPlayer(session.AudioTrack)
-
+	// Reuse the IVR player for hold music so RTP sequence numbers continue
+	// from where the IVR left off. A new player starting at seq=0 would be
+	// dropped by the receiver as "old" until seq exceeds the IVR high-water mark.
 	session.mu.Lock()
+	player := session.IVRPlayer
+	if player == nil || player.IsStopped() {
+		player = NewAudioPlayer(session.AudioTrack)
+	}
 	session.HoldPlayer = player
 	session.mu.Unlock()
 
@@ -138,10 +142,6 @@ func (m *Manager) InitiateAgentTransfer(callLogID, initiatingAgentID uuid.UUID, 
 		return fmt.Errorf("no caller audio track available for hold music")
 	}
 
-	// Create the hold player and set it on the session BEFORE tearing down the
-	// bridge/agentPC. This closes the race window where cleanupSession could
-	// run (triggered by agentPC.Close()) and destroy the session before
-	// HoldPlayer is set.
 	player := NewAudioPlayer(holdTrack)
 	session.HoldPlayer = player
 
@@ -165,6 +165,17 @@ func (m *Manager) InitiateAgentTransfer(callLogID, initiatingAgentID uuid.UUID, 
 	}
 	if bridge != nil {
 		bridge.Stop()
+		bridge.Wait() // Wait for goroutines to finish so lastCallerSeq is final.
+
+		// The bridge forwarded agent RTP with the agent's sequence numbers
+		// (which are typically very high). Pion's Write() rewrites the SSRC
+		// but preserves the original seq, so the receiver's high-water mark
+		// is now at the agent's last seq. Advance the hold music player past
+		// that point so the receiver doesn't drop hold music as "old".
+		seq, ts := bridge.LastCallerSeq()
+		if seq > 0 {
+			player.SetSequence(seq, ts)
+		}
 	}
 	if agentPC != nil {
 		_ = agentPC.Close()
@@ -180,13 +191,35 @@ func (m *Manager) InitiateAgentTransfer(callLogID, initiatingAgentID uuid.UUID, 
 
 	// Start hold music now that the bridge is stopped and no longer writing
 	// to the same track.
+	m.log.Info("Starting hold music for agent transfer",
+		"call_id", session.ID,
+		"file", orgSettings.HoldMusicFile,
+		"hold_track_nil", holdTrack == nil,
+		"caller_remote_nil", callerRemote == nil,
+		"bridge_was_nil", bridge == nil,
+		"agent_pc_was_nil", agentPC == nil,
+	)
+	holdFile := orgSettings.HoldMusicFile
 	go func() {
-		if err := player.PlayFileLoop(orgSettings.HoldMusicFile); err != nil {
+		m.log.Info("Hold music goroutine started", "call_id", session.ID, "file", holdFile)
+		// Play first iteration manually to log packet count
+		packets, err := player.PlayFile(holdFile)
+		if err != nil {
+			m.log.Error("Hold music first play failed",
+				"error", err, "call_id", session.ID, "file", holdFile, "packets_sent", packets)
+			return
+		}
+		m.log.Info("Hold music first loop done",
+			"call_id", session.ID, "packets_sent", packets, "stopped", player.IsStopped())
+		if player.IsStopped() {
+			return
+		}
+		// Continue looping
+		if err := player.PlayFileLoop(holdFile); err != nil {
 			m.log.Error("Hold music playback failed during agent transfer",
-				"error", err,
-				"call_id", session.ID,
-				"file", orgSettings.HoldMusicFile,
-			)
+				"error", err, "call_id", session.ID, "file", holdFile)
+		} else {
+			m.log.Info("Hold music stopped (no error)", "call_id", session.ID)
 		}
 	}()
 
